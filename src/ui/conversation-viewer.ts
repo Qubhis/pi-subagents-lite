@@ -637,13 +637,6 @@ export class ConversationViewer implements Component {
       return lines;
     }
 
-    const toolResults = new Map<string, ToolResultStatus>();
-    for (const msg of messages) {
-      if (msg.role === "toolResult" && msg.toolCallId) {
-        toolResults.set(msg.toolCallId, msg);
-      }
-    }
-
     // Invalidate cache on array replacement or width change (both require full rebuild)
     if (messages !== this.cacheMeta.messagesRef || width !== this.cacheMeta.width) {
       this.messageCache.clear();
@@ -664,7 +657,16 @@ export class ConversationViewer implements Component {
       return result;
     }
 
-    // Slow path: full rebuild
+    // Slow path: full rebuild. Only this path reads result status (for call-line
+    // coloring), so the call-id lookup is built here rather than paying a full
+    // transcript scan on the streaming fast path above.
+    const toolResults = new Map<string, ToolResultStatus>();
+    for (const msg of messages) {
+      if (msg.role === "toolResult" && msg.toolCallId) {
+        toolResults.set(msg.toolCallId, msg);
+      }
+    }
+
     const lines: string[] = [];
 
     for (let i = 0; i < messages.length; i++) {
