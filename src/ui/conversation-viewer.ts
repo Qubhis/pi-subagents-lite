@@ -43,6 +43,15 @@ export const VIEWPORT_HEIGHT_PCT = 70;
 /** Debounce interval for streaming renders — reduces CPU during fast token arrival. */
 const STREAM_RENDER_DEBOUNCE_MS = 100;
 
+/**
+ * What a tool result contributes to rendering: only whether the call errored.
+ * Result content never renders — the lookup exists solely to pick the call
+ * line's status color.
+ */
+interface ToolResultStatus {
+  isError: boolean;
+}
+
 export class ConversationViewer implements Component {
   private modelDisplayStyle: "id" | "name" = "id";
   private scrollOffset = 0;
@@ -209,11 +218,7 @@ export class ConversationViewer implements Component {
   }
 
   /** Render one message's lines — shared by the full rebuild and the streaming refresh. */
-  private renderMessage(
-    msg: any,
-    width: number,
-    toolResults: Map<string, { content: unknown[]; isError: boolean; toolName?: string }>,
-  ): string[] {
+  private renderMessage(msg: any, width: number, toolResults: Map<string, ToolResultStatus>): string[] {
     switch (msg.role) {
       case "user":
         return this.renderUserMessage(msg, width);
@@ -552,11 +557,7 @@ export class ConversationViewer implements Component {
     return [...this.wrapInBg("userMessageBg", inner, width), ""];
   }
 
-  private renderAssistantMessage(
-    msg: any,
-    width: number,
-    toolResults: Map<string, { content: unknown[]; isError: boolean; toolName?: string }>,
-  ): string[] {
+  private renderAssistantMessage(msg: any, width: number, toolResults: Map<string, ToolResultStatus>): string[] {
     const th = this.theme;
     const lines: string[] = [];
     const textParts: string[] = [];
@@ -602,7 +603,7 @@ export class ConversationViewer implements Component {
   private renderToolCall(
     tc: { id?: string; name: string; args?: Record<string, unknown> },
     width: number,
-    toolResults: Map<string, { content: unknown[]; isError: boolean; toolName?: string }>,
+    toolResults: Map<string, ToolResultStatus>,
   ): string[] {
     const th = this.theme;
     const argsSummary = tc.args ? summarizeToolArgs(tc.name, tc.args) : "";
@@ -636,7 +637,7 @@ export class ConversationViewer implements Component {
       return lines;
     }
 
-    const toolResults = new Map<string, { content: unknown[]; isError: boolean; toolName?: string }>();
+    const toolResults = new Map<string, ToolResultStatus>();
     for (const msg of messages) {
       if (msg.role === "toolResult" && msg.toolCallId) {
         toolResults.set(msg.toolCallId, msg);
