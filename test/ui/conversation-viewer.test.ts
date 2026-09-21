@@ -523,19 +523,6 @@ describe("ConversationViewer", () => {
     // against a 21-row viewport: maxScroll = 12. Distinct line markers make
     // the visible window observable through rendered output.
     const manyLines = Array.from({ length: 30 }, (_, i) => `line${i}`).join("\n");
-    // Content rows sit between the separator under the header and the one
-    // above the footer; rows are `│ <content> │` with trailing padding.
-    function visibleContentLines(viewer: ConversationViewer): string[] {
-      const lines = viewer.render(80);
-      const seps: number[] = [];
-      lines.forEach((l, i) => {
-        if (l.includes("─")) seps.push(i);
-      });
-      return lines
-        .slice(seps[1] + 1, seps[2])
-        .map((l) => l.replace(/^│/, "").replace(/│$/, "").trim())
-        .filter(Boolean);
-    }
     // Footer readout: `(currentLine/total · pct%)`. With 33 content lines and
     // a 21-row viewport: top = (21/33 · 64%), one step down = (22/33 · 67%),
     // bottom = (33/33 · 100%).
@@ -560,7 +547,7 @@ describe("ConversationViewer", () => {
 
       expect(readout(viewer)).toBe("(22/33 · 67%)");
       // The window's last content line advanced past the top window.
-      const visible = visibleContentLines(viewer);
+      const visible = contentRows(viewer);
       expect(visible[visible.length - 1]).toBe("line20");
     });
 
@@ -575,11 +562,11 @@ describe("ConversationViewer", () => {
       viewer.handleInput("\x1b[B"); // 1
       viewer.handleInput("\x1b[B"); // 2
       viewer.handleInput("\x1b[B"); // 3
-      expect(visibleContentLines(viewer)[0]).toBe("line2");
+      expect(contentRows(viewer)[0]).toBe("line2");
 
       viewer.handleInput("\x1b[A"); // back to 2
       expect(readout(viewer)).toBe("(23/33 · 70%)");
-      expect(visibleContentLines(viewer)[0]).toBe("line1");
+      expect(contentRows(viewer)[0]).toBe("line1");
     });
 
     it("jumps to top on 'g'", () => {
@@ -591,7 +578,7 @@ describe("ConversationViewer", () => {
       viewer.render(80); // parked at the bottom by autoScroll
       viewer.handleInput("g");
 
-      const visible = visibleContentLines(viewer);
+      const visible = contentRows(viewer);
       expect(visible[0]).toBe("line0");
       expect(visible[visible.length - 1]).toBe("line19");
       expect(readout(viewer)).toBe("(21/33 · 64%)");
@@ -609,7 +596,7 @@ describe("ConversationViewer", () => {
       viewer.handleInput("g"); // top
       viewer.handleInput("G"); // bottom
 
-      const visible = visibleContentLines(viewer);
+      const visible = contentRows(viewer);
       expect(visible[0]).toBe("line11");
       expect(visible[visible.length - 1]).toBe("line29");
       expect(visible).not.toContain("line0");
@@ -627,7 +614,7 @@ describe("ConversationViewer", () => {
       viewer.handleInput("\x1b[A"); // up at the top — must stay clamped at 0
       viewer.handleInput("\x1b[A"); // up again
 
-      const visible = visibleContentLines(viewer);
+      const visible = contentRows(viewer);
       expect(visible[0]).toBe("line0");
       // Readout pins the clamp: a negative offset would drop currentLine below 21.
       expect(readout(viewer)).toBe("(21/33 · 64%)");
