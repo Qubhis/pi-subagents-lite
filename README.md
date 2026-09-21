@@ -33,7 +33,7 @@ The LLM calls `Agent` like any other tool. Foreground agents return inline with 
   └ Now I have enough information to provide a comprehensive answer.
 ```
 
-The widget shows running and recently finished agents above the editor. `↓`/`↑` highlights an agent, `Enter` opens the conversation viewer, `Esc` closes navigation. The viewer streams the live transcript: thinking blocks, tool calls, compaction summaries, and results.
+The widget shows running and recently finished agents above the editor. `↓`/`↑` highlights an agent, `Enter` opens the conversation viewer, `Esc` closes navigation. The viewer streams the live transcript — thinking blocks, tool calls, and compaction summaries. Tool results are not shown: each call appears as a single status-colored line (pending → success/error).
 
 The `/agents` menu covers running agents (view, steer, continue settled agents, stop, clear), manual spawns without an LLM round-trip, model settings, concurrency, and widget layout.
 

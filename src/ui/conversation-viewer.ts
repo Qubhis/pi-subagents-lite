@@ -40,10 +40,17 @@ const CHROME_LINES_BASE = 7;
 const MIN_VIEWPORT = 3;
 /** Cap viewport height at this % of terminal rows so the bordered box fits without clipping. */
 export const VIEWPORT_HEIGHT_PCT = 70;
-const TOOL_RESULT_MAX_CHARS = 500;
-const TOOL_RESULT_MAX_LINES = 5;
 /** Debounce interval for streaming renders — reduces CPU during fast token arrival. */
 const STREAM_RENDER_DEBOUNCE_MS = 100;
+
+/**
+ * What a tool result contributes to rendering: only whether the call errored.
+ * Result content never renders — the lookup exists solely to pick the call
+ * line's status color.
+ */
+interface ToolResultStatus {
+  isError: boolean;
+}
 
 export class ConversationViewer implements Component {
   private modelDisplayStyle: "id" | "name" = "id";
@@ -201,7 +208,7 @@ export class ConversationViewer implements Component {
     if (this.lastInnerW > 0 && msg?.role === "assistant") {
       // No toolResults: the in-flight message's calls have no results yet
       // (they arrive as later messages) — render the calls as pending.
-      this.messageCache.set(index, this.renderMessage(msg, this.lastInnerW, new Map(), new Set()));
+      this.messageCache.set(index, this.renderMessage(msg, this.lastInnerW, new Map()));
     } else {
       // Nothing to rebuild against (no render yet, or a non-assistant end
       // event) — drop the entry and let the next full build handle it.
@@ -211,19 +218,16 @@ export class ConversationViewer implements Component {
   }
 
   /** Render one message's lines — shared by the full rebuild and the streaming refresh. */
-  private renderMessage(
-    msg: any,
-    width: number,
-    toolResults: Map<string, { content: unknown[]; isError: boolean; toolName?: string }>,
-    renderedToolResults: Set<string>,
-  ): string[] {
+  private renderMessage(msg: any, width: number, toolResults: Map<string, ToolResultStatus>): string[] {
     switch (msg.role) {
       case "user":
         return this.renderUserMessage(msg, width);
       case "assistant":
-        return this.renderAssistantMessage(msg, width, toolResults, renderedToolResults);
+        return this.renderAssistantMessage(msg, width, toolResults);
       case "toolResult":
-        return this.renderToolResult(msg, width, renderedToolResults);
+        // Results never render: only the tool call line (with its status
+        // background) represents the call in the viewer.
+        return [];
       default:
         return [];
     }
@@ -501,13 +505,11 @@ export class ConversationViewer implements Component {
   /**
    * Drop cached assistant messages whose tool calls just received a result.
    *
-   * A tool result is rendered inline under its assistant's tool call, and the
-   * standalone toolResult message is suppressed via `renderedToolResults`. That
-   * suppression only holds when the assistant is re-rendered in the same pass as
-   * the fresh toolResult, repopulating `renderedToolResults`. A newly arrived
-   * toolResult must therefore invalidate the cached assistant that references it,
-   * or the result would render twice (cached inline + standalone) or the inline
-   * copy would stay stuck in its pending state.
+   * A tool call line's background derives from whether its result exists
+   * (`toolPendingBg` vs `toolSuccessBg`/`toolErrorBg`), and assistant messages
+   * are cached per-index. A newly arrived toolResult must therefore invalidate
+   * the cached assistant that references it, or the call line would stay stuck
+   * in its pending color even though the call has settled.
    */
   private invalidateCacheForNewMessages(newMsgs: any[], oldCount: number, allMessages: any[]): void {
     const newToolCallIds = new Set<string>();
@@ -537,16 +539,6 @@ export class ConversationViewer implements Component {
     this.cachedContentLines = undefined;
   }
 
-  private wrapToolOutput(bg: string, text: string, width: number): string[] {
-    const th = this.theme;
-    const lines: string[] = [];
-    for (const wl of wrapTextWithAnsi(text, width - 4)) {
-      const pad = Math.max(0, width - visibleWidth(`  ${wl}`));
-      lines.push(th.bg(bg, th.fg("toolOutput", `  ${wl}${" ".repeat(pad)}`)));
-    }
-    return lines;
-  }
-
   private wrapInBg(bg: string, inner: string[], width: number): string[] {
     const fill = this.theme.bg(bg, " ".repeat(width));
     return [fill, ...inner, fill];
@@ -565,12 +557,7 @@ export class ConversationViewer implements Component {
     return [...this.wrapInBg("userMessageBg", inner, width), ""];
   }
 
-  private renderAssistantMessage(
-    msg: any,
-    width: number,
-    toolResults: Map<string, { content: unknown[]; isError: boolean; toolName?: string }>,
-    renderedToolResults: Set<string>,
-  ): string[] {
+  private renderAssistantMessage(msg: any, width: number, toolResults: Map<string, ToolResultStatus>): string[] {
     const th = this.theme;
     const lines: string[] = [];
     const textParts: string[] = [];
@@ -607,35 +594,22 @@ export class ConversationViewer implements Component {
     }
     // Tool calls
     for (const tc of toolCalls) {
-      lines.push(...this.renderToolCall(tc, width, toolResults, renderedToolResults));
+      lines.push(...this.renderToolCall(tc, width, toolResults));
       lines.push("");
     }
     return lines;
   }
 
-  private renderToolResult(msg: any, width: number, renderedToolResults: Set<string>): string[] {
-    if (msg.toolCallId && renderedToolResults.has(msg.toolCallId)) return [];
-    const th = this.theme;
-    const text = extractText(msg.content);
-    if (!text.trim()) return [];
-    const bg = msg.isError ? "toolErrorBg" : "toolSuccessBg";
-    const name = msg.toolName ?? "tool";
-    const toolLine = ` ${th.bold(name)} `;
-    const titlePad = Math.max(0, width - visibleWidth(toolLine));
-    const inner = [th.bg(bg, th.fg("toolTitle", `${toolLine}${" ".repeat(titlePad)}`))];
-    inner.push(...this.wrapToolOutput(bg, text.trim(), width));
-    return [...this.wrapInBg(bg, inner, width), ""];
-  }
-
   private renderToolCall(
     tc: { id?: string; name: string; args?: Record<string, unknown> },
     width: number,
-    toolResults: Map<string, { content: unknown[]; isError: boolean; toolName?: string }>,
-    renderedToolResults: Set<string>,
+    toolResults: Map<string, ToolResultStatus>,
   ): string[] {
     const th = this.theme;
     const argsSummary = tc.args ? summarizeToolArgs(tc.name, tc.args) : "";
     const label = argsSummary ? `${tc.name}${argsSummary}` : tc.name;
+    // The result's content never renders; this lookup only picks the call
+    // line's status color — pending while it runs, success/error once settled.
     const result = tc.id ? toolResults.get(tc.id) : undefined;
     const bg = result ? (result.isError ? "toolErrorBg" : "toolSuccessBg") : "toolPendingBg";
     const inner: string[] = [];
@@ -644,33 +618,7 @@ export class ConversationViewer implements Component {
       const padNeeded = Math.max(0, width - visibleWidth(tl));
       inner.push(th.bg(bg, th.fg("toolTitle", `${tl}${" ".repeat(padNeeded)}`)));
     }
-    if (result && tc.id) {
-      inner.push(th.bg(bg, " ".repeat(width)));
-      renderedToolResults.add(tc.id);
-      inner.push(...this.renderToolCallResult(result, bg, width));
-    }
     return this.wrapInBg(bg, inner, width);
-  }
-
-  private renderToolCallResult(result: { content: unknown[]; isError: boolean }, bg: string, width: number): string[] {
-    const th = this.theme;
-    const resultText = extractText(result.content);
-    if (!resultText.trim()) return [];
-
-    if (resultText.length > TOOL_RESULT_MAX_CHARS) {
-      const resultLines = resultText.split("\n");
-      const linesToShow = Math.min(TOOL_RESULT_MAX_LINES, resultLines.length);
-      const lines: string[] = [];
-      for (let i = 0; i < linesToShow; i++) {
-        lines.push(...this.wrapToolOutput(bg, resultLines[i] || " ", width));
-      }
-      if (resultLines.length > linesToShow) {
-        const more = th.fg("dim", `  … ${resultLines.length - linesToShow} more lines`);
-        lines.push(th.bg(bg, more + " ".repeat(Math.max(0, width - visibleWidth(more)))));
-      }
-      return lines;
-    }
-    return this.wrapToolOutput(bg, resultText.trim(), width);
   }
 
   private buildContentLines(width: number): string[] {
@@ -688,15 +636,6 @@ export class ConversationViewer implements Component {
       this.cachedContentLines = lines;
       return lines;
     }
-
-    const toolResults = new Map<string, { content: unknown[]; isError: boolean; toolName?: string }>();
-    for (const msg of messages) {
-      if (msg.role === "toolResult" && msg.toolCallId) {
-        toolResults.set(msg.toolCallId, msg);
-      }
-    }
-
-    const renderedToolResults = new Set<string>();
 
     // Invalidate cache on array replacement or width change (both require full rebuild)
     if (messages !== this.cacheMeta.messagesRef || width !== this.cacheMeta.width) {
@@ -718,7 +657,16 @@ export class ConversationViewer implements Component {
       return result;
     }
 
-    // Slow path: full rebuild
+    // Slow path: full rebuild. Only this path reads result status (for call-line
+    // coloring), so the call-id lookup is built here rather than paying a full
+    // transcript scan on the streaming fast path above.
+    const toolResults = new Map<string, ToolResultStatus>();
+    for (const msg of messages) {
+      if (msg.role === "toolResult" && msg.toolCallId) {
+        toolResults.set(msg.toolCallId, msg);
+      }
+    }
+
     const lines: string[] = [];
 
     for (let i = 0; i < messages.length; i++) {
@@ -726,7 +674,7 @@ export class ConversationViewer implements Component {
       if (cached) {
         lines.push(...cached);
       } else {
-        const msgLines = this.renderMessage(messages[i], width, toolResults, renderedToolResults);
+        const msgLines = this.renderMessage(messages[i], width, toolResults);
         this.messageCache.set(i, msgLines);
         lines.push(...msgLines);
       }
