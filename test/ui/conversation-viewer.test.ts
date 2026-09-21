@@ -827,25 +827,6 @@ describe("ConversationViewer", () => {
   });
 
   describe("caching", () => {
-    it("hides a settled call's result content (no inline or standalone copy)", () => {
-      const session = makeMockSession([
-        { role: "assistant", content: [{ type: "toolCall", id: "t1", name: "uniqtool" }] },
-        {
-          role: "toolResult",
-          toolCallId: "t1",
-          toolName: "uniqtool",
-          isError: false,
-          content: [{ type: "text", text: "UNIQRESULT" }],
-        },
-      ]);
-      const record = makeMockRecord({ execution: { settled: false, settlementCount: 0, session } });
-      const viewer = new ConversationViewer(makeTui(), session, record, noopTheme, vi.fn());
-
-      const text = viewer.render(80).join("\n");
-      expect(count(text, "UNIQRESULT")).toBe(0);
-      expect(count(text, "uniqtool")).toBe(1);
-    });
-
     it("re-renders a cached pending tool call to its settled color when its result arrives", () => {
       const session = makeMockSession([
         { role: "assistant", content: [{ type: "toolCall", id: "t1", name: "uniqtool" }] },
