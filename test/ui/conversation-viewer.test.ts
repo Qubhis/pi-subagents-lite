@@ -75,8 +75,11 @@ vi.mock("@earendil-works/pi-tui", () => ({
       return result;
     }
   },
-  truncateToWidth: vi.fn((s: string, w: number) => (s.length > w ? s.slice(0, w - 3) + "..." : s)),
-  visibleWidth: vi.fn((s: string) => s.length),
+  truncateToWidth: vi.fn((s: string, w: number) => {
+    const plain = s.replace(/\x1b\[[0-9;]*m/g, "");
+    return plain.length > w ? plain.slice(0, w - 3) + "..." : s;
+  }),
+  visibleWidth: vi.fn((s: string) => s.replace(/\x1b\[[0-9;]*m/g, "").length),
   wrapTextWithAnsi: vi.fn((text: string, width: number) => {
     const lines = text.split("\n");
     const result: string[] = [];
@@ -114,12 +117,21 @@ const noopTheme: Theme = {
 };
 
 /**
- * Theme that marks bg() calls in the rendered output. The tool-result
- * success/error distinction is a background color, which noopTheme flattens.
+ * Theme that renders bg() as real SGR background codes. The tool-call
+ * success/error/pending distinction is a background color, which noopTheme
+ * flattens; real escape codes (unlike text markers) keep the ANSI-aware
+ * width math honest, so marked lines measure their true visible width.
  */
+const BG_ON: Record<string, string> = {
+  toolPendingBg: "\x1b[100m",
+  toolSuccessBg: "\x1b[42m",
+  toolErrorBg: "\x1b[41m",
+  userMessageBg: "\x1b[44m",
+};
+const BG_OFF = "\x1b[49m";
 const bgMarkingTheme: Theme = {
   fg: (_color: string, text: string) => text,
-  bg: (color: string, text: string) => `[bg:${color}]${text}[/bg]`,
+  bg: (color: string, text: string) => `${BG_ON[color] ?? "\x1b[45m"}${text}${BG_OFF}`,
   bold: (text: string) => text,
   italic: (text: string) => text,
 };
@@ -192,6 +204,24 @@ function count(haystack: string, needle: string): number {
 function readoutTotal(text: string): number {
   const m = text.match(/\((\d+)\/(\d+) · /);
   return m ? Number(m[2]) : 0;
+}
+
+/**
+ * Content rows between the separator under the header and the one above the
+ * footer, trimmed of the `│ … │` row frame and empties. With bgMarkingTheme
+ * this pins the exact rendered content array (per the layout lesson), not
+ * just membership.
+ */
+function contentRows(viewer: ConversationViewer): string[] {
+  const lines = viewer.render(80);
+  const seps: number[] = [];
+  lines.forEach((l, i) => {
+    if (l.includes("─")) seps.push(i);
+  });
+  return lines
+    .slice(seps[1] + 1, seps[2])
+    .map((l) => l.replace(/^│/, "").replace(/│$/, "").trim())
+    .filter(Boolean);
 }
 
 // --- Tests ---
@@ -640,7 +670,7 @@ describe("ConversationViewer", () => {
       expect(text).toContain("here is the answer");
     });
 
-    it("renders tool results with success background", () => {
+    it("renders nothing for a standalone toolResult message", () => {
       const session = makeMockSession([
         {
           role: "toolResult",
@@ -650,57 +680,79 @@ describe("ConversationViewer", () => {
         },
       ]);
       const record = makeMockRecord({ execution: { settled: false, settlementCount: 0, session } });
-      const tui = makeTui();
 
-      const viewer = new ConversationViewer(tui, session, record, bgMarkingTheme, vi.fn());
-      const lines = viewer.render(80);
-      const text = lines.join("\n");
+      const viewer = new ConversationViewer(makeTui(), session, record, bgMarkingTheme, vi.fn());
 
-      expect(text).toContain("read");
-      expect(text).toContain("toolSuccessBg");
-      expect(text).not.toContain("toolErrorBg");
+      // No title bar, no output block, no status background anywhere.
+      expect(contentRows(viewer)).toEqual([]);
+      expect(viewer.render(80).join("\n")).not.toContain("file contents here");
     });
 
-    it("renders tool results with error background", () => {
+    it("renders a settled tool call as one status-colored line with no result content", () => {
       const session = makeMockSession([
+        { role: "assistant", content: [{ type: "toolCall", id: "t1", name: "uniqtool" }] },
         {
           role: "toolResult",
-          content: [{ type: "text", text: "file not found" }],
-          toolName: "read",
-          isError: true,
+          toolCallId: "t1",
+          toolName: "uniqtool",
+          isError: false,
+          content: [{ type: "text", text: "SECRET-RESULT-TEXT" }],
         },
       ]);
       const record = makeMockRecord({ execution: { settled: false, settlementCount: 0, session } });
-      const tui = makeTui();
 
-      const viewer = new ConversationViewer(tui, session, record, bgMarkingTheme, vi.fn());
-      const lines = viewer.render(80);
-      const text = lines.join("\n");
+      const viewer = new ConversationViewer(makeTui(), session, record, bgMarkingTheme, vi.fn());
 
-      expect(text).toContain("read");
-      expect(text).toContain("toolErrorBg");
-      expect(text).not.toContain("toolSuccessBg");
+      // Exact call block: fill / title / fill, all in the success background —
+      // the same 3-line shape a pending call renders. No result rows follow.
+      // innerW for render(80) is 76; each row is bg-padded to full inner width.
+      const fill = `${BG_ON.toolSuccessBg}${" ".repeat(76)}${BG_OFF}`;
+      const title = `${BG_ON.toolSuccessBg} uniqtool ${" ".repeat(76 - " uniqtool ".length)}${BG_OFF}`;
+      expect(contentRows(viewer)).toEqual([fill, title, fill]);
+      expect(viewer.render(80).join("\n")).not.toContain("SECRET-RESULT-TEXT");
     });
 
-    it("truncates tool results at 500 chars", () => {
-      const longContent = "x".repeat(600); // >500 triggers truncation, but preview fits in viewport
+    it("renders an errored tool call with the error background and no result content", () => {
       const session = makeMockSession([
+        { role: "assistant", content: [{ type: "toolCall", id: "t1", name: "uniqtool" }] },
         {
           role: "toolResult",
-          content: [{ type: "text", text: longContent }],
+          toolCallId: "t1",
+          toolName: "uniqtool",
+          isError: true,
+          content: [{ type: "text", text: "boom trace" }],
+        },
+      ]);
+      const record = makeMockRecord({ execution: { settled: false, settlementCount: 0, session } });
+
+      const viewer = new ConversationViewer(makeTui(), session, record, bgMarkingTheme, vi.fn());
+
+      const fill = `${BG_ON.toolErrorBg}${" ".repeat(76)}${BG_OFF}`;
+      const title = `${BG_ON.toolErrorBg} uniqtool ${" ".repeat(76 - " uniqtool ".length)}${BG_OFF}`;
+      expect(contentRows(viewer)).toEqual([fill, title, fill]);
+      expect(viewer.render(80).join("\n")).not.toContain("boom trace");
+    });
+
+    it("hides arbitrarily large result content (no truncation preview)", () => {
+      const longContent = "x".repeat(600); // far past any truncation threshold
+      const session = makeMockSession([
+        { role: "assistant", content: [{ type: "toolCall", id: "t1", name: "bash" }] },
+        {
+          role: "toolResult",
+          toolCallId: "t1",
           toolName: "bash",
           isError: false,
+          content: [{ type: "text", text: longContent }],
         },
       ]);
       const record = makeMockRecord({ execution: { settled: false, settlementCount: 0, session } });
-      const tui = makeTui();
 
-      const viewer = new ConversationViewer(tui, session, record, noopTheme, vi.fn());
-      const lines = viewer.render(80);
-      const text = lines.join("\n");
+      const viewer = new ConversationViewer(makeTui(), session, record, noopTheme, vi.fn());
 
+      const text = viewer.render(80).join("\n");
       expect(text).toContain("bash");
-      expect(text).toContain("xxxxx");
+      expect(text).not.toContain("xxxxx");
+      expect(text).not.toContain("more lines");
     });
 
     it("renders thinking blocks in assistant messages", () => {
@@ -781,7 +833,7 @@ describe("ConversationViewer", () => {
   });
 
   describe("caching", () => {
-    it("renders a tool result once, inline under its call (no standalone duplicate)", () => {
+    it("hides a settled call's result content (no inline or standalone copy)", () => {
       const session = makeMockSession([
         { role: "assistant", content: [{ type: "toolCall", id: "t1", name: "uniqtool" }] },
         {
@@ -796,19 +848,23 @@ describe("ConversationViewer", () => {
       const viewer = new ConversationViewer(makeTui(), session, record, noopTheme, vi.fn());
 
       const text = viewer.render(80).join("\n");
-      expect(count(text, "UNIQRESULT")).toBe(1);
+      expect(count(text, "UNIQRESULT")).toBe(0);
       expect(count(text, "uniqtool")).toBe(1);
     });
 
-    it("re-renders a cached assistant tool call when its result arrives (no duplicate title)", () => {
+    it("re-renders a cached pending tool call to its settled color when its result arrives", () => {
       const session = makeMockSession([
         { role: "assistant", content: [{ type: "toolCall", id: "t1", name: "uniqtool" }] },
       ]);
       const record = makeMockRecord({ execution: { settled: false, settlementCount: 0, session } });
-      const viewer = new ConversationViewer(makeTui(), session, record, noopTheme, vi.fn());
+      const viewer = new ConversationViewer(makeTui(), session, record, bgMarkingTheme, vi.fn());
 
-      // First render caches the assistant message as a pending tool call.
-      viewer.render(80);
+      // First render caches the assistant message as a pending tool call:
+      // fill / title / fill, all pending.
+      const pending = viewer.render(80).join("\n");
+      expect(count(pending, BG_ON.toolPendingBg)).toBe(3);
+      expect(pending).not.toContain(BG_ON.toolSuccessBg);
+
       // The tool result then arrives as a new message.
       session.messages.push({
         role: "toolResult",
@@ -818,9 +874,13 @@ describe("ConversationViewer", () => {
         content: [{ type: "text", text: "UNIQRESULT" }],
       });
 
-      const text = viewer.render(80).join("\n");
-      expect(count(text, "UNIQRESULT")).toBe(1);
-      expect(count(text, "uniqtool")).toBe(1);
+      // The cached call line must refresh to the settled background — a frozen
+      // pending color would hide the completion. Result text stays hidden.
+      const settled = viewer.render(80).join("\n");
+      expect(settled).not.toContain(BG_ON.toolPendingBg);
+      expect(count(settled, BG_ON.toolSuccessBg)).toBe(3);
+      expect(count(settled, "uniqtool")).toBe(1);
+      expect(settled).not.toContain("UNIQRESULT");
     });
 
     it("scrolls to the true bottom when streaming adds lines (scrollMax not stale)", () => {
