@@ -224,6 +224,18 @@ function contentRows(viewer: ConversationViewer): string[] {
     .filter(Boolean);
 }
 
+/**
+ * The exact 3-row block a tool call renders at render(80): bg fill / title /
+ * bg fill — the same shape whether the call is pending or settled, since
+ * results never add rows.
+ */
+function expectedCallBlock(bg: string, label: string): string[] {
+  const innerW = 76; // render(80) minus border + padding
+  const fill = `${bg}${" ".repeat(innerW)}${BG_OFF}`;
+  const title = `${bg} ${label} ${" ".repeat(innerW - ` ${label} `.length)}${BG_OFF}`;
+  return [fill, title, fill];
+}
+
 // --- Tests ---
 
 describe("ConversationViewer", () => {
@@ -690,12 +702,9 @@ describe("ConversationViewer", () => {
 
       const viewer = new ConversationViewer(makeTui(), session, record, bgMarkingTheme, vi.fn());
 
-      // Exact call block: fill / title / fill, all in the success background —
-      // the same 3-line shape a pending call renders. No result rows follow.
-      // innerW for render(80) is 76; each row is bg-padded to full inner width.
-      const fill = `${BG_ON.toolSuccessBg}${" ".repeat(76)}${BG_OFF}`;
-      const title = `${BG_ON.toolSuccessBg} uniqtool ${" ".repeat(76 - " uniqtool ".length)}${BG_OFF}`;
-      expect(contentRows(viewer)).toEqual([fill, title, fill]);
+      // Exact call block shape — the same 3 rows a pending call renders, so no
+      // result rows follow.
+      expect(contentRows(viewer)).toEqual(expectedCallBlock(BG_ON.toolSuccessBg, "uniqtool"));
       expect(viewer.render(80).join("\n")).not.toContain("SECRET-RESULT-TEXT");
     });
 
@@ -714,9 +723,7 @@ describe("ConversationViewer", () => {
 
       const viewer = new ConversationViewer(makeTui(), session, record, bgMarkingTheme, vi.fn());
 
-      const fill = `${BG_ON.toolErrorBg}${" ".repeat(76)}${BG_OFF}`;
-      const title = `${BG_ON.toolErrorBg} uniqtool ${" ".repeat(76 - " uniqtool ".length)}${BG_OFF}`;
-      expect(contentRows(viewer)).toEqual([fill, title, fill]);
+      expect(contentRows(viewer)).toEqual(expectedCallBlock(BG_ON.toolErrorBg, "uniqtool"));
       expect(viewer.render(80).join("\n")).not.toContain("boom trace");
     });
 
