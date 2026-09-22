@@ -312,14 +312,18 @@ export async function toolCallListener(event: ToolCallEvent, ctx: ExtensionConte
 
   const effectiveModel = getStore().modelFor(subagentType ?? "general-purpose", parentModelId, agentConfig);
 
-  if (effectiveModel) {
-    input.model = effectiveModel;
-    // Always inject _modelOverride for renderCall
-    const parsed = parseModelKey(effectiveModel);
-    if (parsed) {
-      input._modelOverride = parsed.modelId;
-    }
-  }
+  // Respect an explicitly-passed model (spawn-time override). Only inject the                                                                        
+  // configured/default model when the caller did not set one — mirrors the                                                                           
+  // thinking branch below.                                                                                                                           
+  if (input.model === undefined && effectiveModel) {                                                                                                  
+    input.model = effectiveModel;                                                                                                                     
+  }                                                                                                                                                   
+  if (input.model) {                                                                                                                                  
+    const parsed = parseModelKey(input.model as string);                                                                                              
+    if (parsed) {                                                                                                                                     
+      input._modelOverride = parsed.modelId;                                                                                                          
+   }                                                                                                                                                 
+  } 
 
   // Inject the spawn-effective thinking when the call carries none. The
   // injected value becomes the explicit param at execution, so it must mirror
