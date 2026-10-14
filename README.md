@@ -41,13 +41,20 @@ The `/agents` menu covers running agents (view, steer, continue settled agents, 
 
 - `Agent` spawns a sub-agent (see [Agent options](#agent-options) for parameters).
 - `StopAgent` stops a running or queued agent by ID. IDs come from the spawn result, the stop error, or `/agents`.
+- `MessageAgent` gives an existing agent more input by ID: a running one picks it up at its next turn boundary, a settled one continues on it with its own context.
 - `AgentStatus` lists all agents with type, short ID, and status.
+
+Both ID forms work as input: the short ID shown in listings resolves when it identifies exactly one agent, and a prefix that matches several is refused rather than guessed.
 
 Foreground agents dont lock the session and can be stopped by parent's interrupt. Background agents are fully autonomous.
 
 ### Steering and continuation
 
-Steer a running agent mid-task to redirect it: `Enter` in the conversation viewer, or `Steer` in the `/agents` menu. Settled agents (completed, errored, stopped, turn-limited) can be continued manually from the conversation viewer.
+Steer a running agent mid-task to redirect it: `Enter` in the conversation viewer, `Steer` in the `/agents` menu, or `MessageAgent` from the session agent. Settled agents (completed, errored, stopped, turn-limited) can be continued from the conversation viewer, the `/agents` menu, or `MessageAgent`, as long as their session is still live.
+
+### Permission gates and other Subagent-aware extensions
+
+Lite announces each Subagent session on pi's extension event bus when it is created, when its extensions bind, and when it is disposed. A gate installed alongside lite, for example `@gotgenes/pi-permission-system`, uses those announcements to escalate an `ask` decision made inside a Subagent to the parent session instead of failing closed inside the child. With no such extension installed nothing is observable, on a pi without the event bus the announcements are skipped, and if pi refuses one, which happens when the parent session is replaced, reloaded or disposed while the Subagent is still running, lite warns and names that Subagent. An announcement never fails a spawn or a teardown.
 
 ## Built-in agents
 
@@ -93,7 +100,7 @@ A minimal agent with just `name` and `description` gets everything, same as `gen
 | `skills` | `true` \| `string[]` \| `false` | `true` | Skill whitelist (metadata-only in system prompt). |
 | `preload_skills` | `string[]` \| `false` | `false` | Dump full SKILL.md content into the system prompt. Expensive. |
 | `model` | string | inherit parent | `"provider/model-id"`. See [Model resolution](#model-resolution). |
-| `thinking` | string | inherit parent | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. |
+| `thinking` | string | see [Thinking level resolution](#thinking-level-resolution) | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `parent` to follow the parent session. |
 | `max_turns` | number | unlimited | Soft turn limit, then grace turns before hard abort. |
 | `max_tokens` | number | unlimited | Max output tokens per LLM response. |
 | `hidden` | boolean | `false` | Hide from the enum. Still callable by name. |
@@ -101,9 +108,21 @@ A minimal agent with just `name` and `description` gets everything, same as `gen
 | `include_context_files` | boolean | inherit global | Include AGENTS.md files as `<project_context>` in the system prompt. `true` = load, `false` = none, unset = global "Include AGENTS.md" setting. |
 | `include_system_prompt` | boolean | inherit global | Include the parent's system prompt for this agent. `true` = inherit parent, `false` = replace mode, unset = global mode. When the global mode is `custom`, the custom prompt wins over `true`. |
 
-Tool and extension lists accept built-in names (`read`, `bash`, `edit`, `write`, `grep`), extension tool names (`web_search`), and `ext/*` globs (`tavily/*`). `exclude_tools: [tavily/*]` hides the tools but the extension still loads. Use `exclude_extensions: [tavily]` to prevent loading.
+When frontmatter omits `tools` and the agent type carries no explicit registered-tools set, `loadToolsImplicitly` (config, default ON) decides: ON delegates tool setup to pi, so your `defaultTools` setting applies exactly as in a normal session, and tools left inactive stay registered for dispatcher tools to call by name. OFF starts such agents with no tools. Explicit frontmatter always wins.
 
-`loadSkillsImplicitly` and `loadExtensionsImplicitly` (config, default ON) decide what an agent gets when frontmatter omits `skills` or `extensions`. Turn them OFF to default new agents to nothing and opt in explicitly.
+`tools` and `exclude_tools` accept built-in names (`read`, `bash`, `edit`, `write`, `grep`) and extension tool names (`web_search`). Use `tavily/*` or `tavily/all` in either list to include or exclude all tools from that extension. Excluding tools doesn't prevent the extension from loading; use `exclude_extensions: [tavily]` to prevent loading.
+
+`loadSkillsImplicitly`, `loadExtensionsImplicitly`, and `loadToolsImplicitly` (config, default ON) decide what an agent gets when frontmatter omits `skills`, `extensions`, or the tool fields. Turn one OFF to default new agents to nothing on that axis and opt in explicitly.
+
+Built-in extensions: child sessions load pi's built-in codemode, tool-search, and mcp extensions (llama.cpp excluded), addressed by bare name (`codemode`) from `defaultTools`, settings `extensions`, and frontmatter, exactly as in a normal session. A user extension registering the same tool, command, or flag replaces the built-in.
+
+Codemode in Subagents needs two things: the codemode extension loaded, and the codemode tool activated. With default settings one line does both, in `.pi/settings.json`:
+
+```json
+{ "defaultTools": ["+codemode"] }
+```
+
+Every agent whose frontmatter omits `tools` then starts with codemode active, exactly like your main session. Agents with an explicit `tools` list ignore `defaultTools`: add `codemode` to that list to activate it. If `loadExtensionsImplicitly` is off, agents also need `extensions: codemode` in frontmatter to load the extension.
 
 ## Agent options
 
@@ -136,6 +155,22 @@ Precedence, highest first:
 5. Agent frontmatter `model`
 6. Parent model
 
+## Thinking level resolution
+
+Precedence, highest first:
+
+1. Spawn choice (`/agents` spawn wizard)
+2. Agent frontmatter `thinking`
+3. pi's per-model level for the resolved model (`modelThinkingLevels`)
+4. `Subagent default thinking` (`defaultThinking`, project over global)
+5. pi's own default (`defaultThinkingLevel`, else `medium`)
+
+Then clamped to the resolved model's supported levels; non-reasoning models support only `off`.
+
+Any source can hold `parent` to follow the parent session's current level: `thinking: parent` for one agent type, `Subagent default thinking` for every Subagent with no higher source. Resolution happens before the Subagent starts, so a run always reports a real level, and a `parent` with no parent to read counts as unset.
+
+Model settings and the spawn wizard print the deciding source in brackets: `high (frontmatter)`, `medium (pi default)`, `minimal (parent)`. `pi default` means nothing is configured here, so pi's own setting decides; in the spawn wizard that choice sends no level at all.
+
 ## Concurrency
 
 `concurrency` caps parallel agents. A per-model limit overrides a per-provider limit, which overrides the `default` per-model limit. Excess spawns queue until a slot frees.
@@ -144,7 +179,7 @@ Precedence, highest first:
 
 Global settings live in `~/.pi/agent/subagents-lite.json`, managed via `/agents` or edited directly. 
 
-`/agents` covers model settings per-type overrides, concurrency, widget, spawn defaults (thinking, max turns, force-background), system prompt mode, watchdog timeouts.
+`/agents` covers model settings per-type overrides, concurrency, widget, spawn defaults (Subagent default thinking, max turns, force-background), system prompt mode, watchdog timeouts.
 
 ```
 Settings

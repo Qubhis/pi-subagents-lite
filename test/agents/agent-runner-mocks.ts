@@ -46,7 +46,6 @@ interface MockLoaderInstance {
 
 /** The SettingsManager surface the spawn path reads from SettingsManager.create. */
 export interface MockSettingsManager {
-  getDefaultTools?: () => string[] | undefined;
   getModelThinkingLevel?: (provider: string, modelId: string) => import("../../src/types.js").ThinkingLevel | undefined;
   isProjectTrusted?: () => boolean;
 }
@@ -69,7 +68,6 @@ const _loaderGetExtensionsResult: TestLoadExtensionsResult = { extensions: [], e
 const hoisted = vi.hoisted(() => ({
   mockGetConfig: vi.fn(),
   mockGetAgentConfig: vi.fn(),
-  mockGetToolNamesForType: vi.fn(),
   mockBuildAgentPrompt: vi.fn(),
   mockExtractText: vi.fn(),
   mockPreloadSkills: vi.fn().mockReturnValue([]),
@@ -79,11 +77,11 @@ const hoisted = vi.hoisted(() => ({
   mockGetAgentDir: vi.fn().mockReturnValue("/home/test/.pi/agent"),
   mockLoadProjectContextFiles: vi.fn().mockReturnValue([]),
   mockSettingsManagerCreate: vi.fn<() => MockSettingsManager>(() => ({
-    getDefaultTools: vi.fn(() => undefined),
     getModelThinkingLevel: vi.fn(() => undefined),
   })),
   mockIncludeContextFiles: true as boolean,
   mockSystemPromptMode: "replace" as string,
+  mockLoadToolsImplicitly: true as boolean,
   getLoaderOpts: () => _loaderOpts[_loaderOpts.length - 1] ?? null,
   clearLoaderOpts: () => {
     _loaderOpts.length = 0;
@@ -96,14 +94,13 @@ const hoisted = vi.hoisted(() => ({
   },
   mockEnterSubagentSpawn: vi.fn(),
   mockExitSubagentSpawn: vi.fn(),
-  mockDefaultThinking: undefined as import("../../src/types.js").ThinkingLevel | undefined,
+  mockDefaultThinking: undefined as import("../../src/types.js").ThinkingChoice | undefined,
 }));
 
 /** Mutable mock state accessible from test files. */
 export const mockModules = {
   mockGetConfig: hoisted.mockGetConfig,
   mockGetAgentConfig: hoisted.mockGetAgentConfig,
-  mockGetToolNamesForType: hoisted.mockGetToolNamesForType,
   mockBuildAgentPrompt: hoisted.mockBuildAgentPrompt,
   mockExtractText: hoisted.mockExtractText,
   mockPreloadSkills: hoisted.mockPreloadSkills,
@@ -125,6 +122,12 @@ export const mockModules = {
   set mockSystemPromptMode(v: string) {
     hoisted.mockSystemPromptMode = v;
   },
+  get mockLoadToolsImplicitly() {
+    return hoisted.mockLoadToolsImplicitly;
+  },
+  set mockLoadToolsImplicitly(v: boolean) {
+    hoisted.mockLoadToolsImplicitly = v;
+  },
   getLoaderOpts: hoisted.getLoaderOpts,
   clearLoaderOpts: hoisted.clearLoaderOpts,
   setLoaderExtensions: hoisted.setLoaderExtensions,
@@ -134,7 +137,7 @@ export const mockModules = {
   get mockDefaultThinking() {
     return hoisted.mockDefaultThinking;
   },
-  set mockDefaultThinking(v: import("../../src/types.js").ThinkingLevel | undefined) {
+  set mockDefaultThinking(v: import("../../src/types.js").ThinkingChoice | undefined) {
     hoisted.mockDefaultThinking = v;
   },
 };
@@ -150,7 +153,6 @@ vi.mock("../../src/agents/agent-types.js", async () => {
     ...actual,
     getConfig: mockModules.mockGetConfig,
     getAgentConfig: mockModules.mockGetAgentConfig,
-    getToolNamesForType: mockModules.mockGetToolNamesForType,
   };
 });
 
@@ -176,6 +178,9 @@ vi.mock("../../src/shell.js", () => ({
       forceBackground: false,
       showCost: false,
       defaultModel: null,
+      get loadToolsImplicitly() {
+        return mockModules.mockLoadToolsImplicitly;
+      },
       get defaultThinking() {
         return mockModules.mockDefaultThinking;
       },
@@ -187,6 +192,9 @@ vi.mock("../../src/shell.js", () => ({
 
 vi.mock("@earendil-works/pi-coding-agent", () => ({
   createAgentSession: mockModules.mockCreateAgentSession,
+  createCodemodeExtension: vi.fn(() => vi.fn()),
+  createMcpExtension: vi.fn(() => vi.fn()),
+  createToolSearchExtension: vi.fn(() => vi.fn()),
   DefaultResourceLoader: mockModules.mockDefaultResourceLoader,
   SessionManager: { inMemory: vi.fn() },
   SettingsManager: { create: mockModules.mockSettingsManagerCreate },
@@ -201,7 +209,6 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
 export const defaultConfig = {
   displayName: "Agent",
   description: "Test agent",
-  registeredTools: ["read", "bash", "edit"],
   extensions: true,
   skills: true,
 };
@@ -229,12 +236,12 @@ export function resetMocks() {
 
   mockModules.mockGetConfig.mockReturnValue({ ...defaultConfig });
   mockModules.mockGetAgentConfig.mockReturnValue({ ...defaultAgentConfig });
-  mockModules.mockGetToolNamesForType.mockReturnValue(["read", "bash", "edit"]);
   mockModules.mockBuildAgentPrompt.mockReturnValue("system prompt");
   mockModules.mockExtractText.mockReturnValue("");
   mockModules.mockGetAgentDir.mockReturnValue("/home/test/.pi/agent");
   mockModules.mockPreloadSkills.mockReturnValue([]);
   mockModules.mockDefaultThinking = undefined;
+  mockModules.mockLoadToolsImplicitly = true;
 }
 
 /* ------------------------------------------------------------------ */
@@ -248,6 +255,8 @@ export interface MockSession {
   setActiveToolsByName: Mock<(tools: string[]) => void>;
   getActiveTools: Mock<() => string[] | undefined>;
   bindExtensions: Mock<() => void>;
+  extensionRunner: { emit: Mock<(event: unknown) => Promise<unknown>> };
+  dispose: Mock<() => void>;
   subscribe: Mock<(listener: (event: unknown) => void) => () => void>;
   prompt: Mock<(text: string) => Promise<void>>;
   steer: Mock<(text: string) => Promise<void>>;
@@ -271,6 +280,8 @@ export function createMockSession(): MockSession {
     }),
     getActiveTools: vi.fn(() => activeTools),
     bindExtensions: vi.fn(),
+    extensionRunner: { emit: vi.fn(async () => undefined) },
+    dispose: vi.fn(),
     subscribe: vi.fn((listener: (event: unknown) => void) => {
       listeners.push(listener);
       return () => {

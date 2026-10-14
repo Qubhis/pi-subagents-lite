@@ -16,10 +16,11 @@ import { resolveType, getAgentConfig, resolveTypeOrDiscover, type TypeResolution
 import { getSessionContextPercent } from "./usage.js";
 import { computeSpawnTarget, surfaceSpawnTargetWarnings } from "../spawn/spawn-target.js";
 
-import { parseModelKey, findModelInRegistry, parseThinkingLevel } from "../utils.js";
+import { parseModelKey, findModelInRegistry, parseThinkingChoice } from "../utils.js";
 import { resolveThinkingLevel } from "../models/thinking-resolution.js";
 import { getPiModelThinkingLevel } from "../pi-settings.js";
 import { getPiInstance, getStore, getCoordinator, getManager } from "../shell.js";
+import { formatAgentStatusList } from "./agent-status.js";
 
 // --- Tool result helpers ---
 
@@ -31,11 +32,13 @@ function successResult(text: string, details?: Record<string, unknown>) {
  * The thinking a spawn of this call would run with, predicted at call time:
  * frontmatter > pi per-model > defaultThinking. Undefined when nothing is
  * configured — the session is the source of truth once it exists. The
- * per-model term obeys the same project-trust gate as the spawn's own
- * settings read: computeSpawnTarget's validation plus trust decision, run
- * silently (execution owns the user-facing warnings). Without the gate, an
- * untrusted cross-repo target's settings file could set the spawn's thinking
- * through the injected value, which wins as the explicit param.
+ * per-model term carries the spawn target's trust decision into the settings
+ * read: computeSpawnTarget's validation plus trust decision, run silently
+ * (execution owns the user-facing warnings). An untrusted target's own project
+ * layer is then ignored, so its settings file cannot set the spawn's thinking
+ * through the injected value (which wins as the explicit param), while the
+ * user's global layer still applies — the scope the child's session is created
+ * with.
  */
 async function predictSpawnThinking(
   ctx: ExtensionContext,
@@ -49,13 +52,16 @@ async function predictSpawnThinking(
   const modelKey = effectiveModel || (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "");
   const parsed = parseModelKey(modelKey);
   const perModel =
-    target.ok && target.projectTrusted && parsed
-      ? getPiModelThinkingLevel(target.resolvedPath ?? ctx.cwd, parsed.provider, parsed.modelId)
+    target.ok && parsed
+      ? getPiModelThinkingLevel(target.resolvedPath ?? ctx.cwd, parsed.provider, parsed.modelId, {
+          projectTrusted: target.projectTrusted,
+        })
       : undefined;
   return resolveThinkingLevel({
     frontmatter: agentConfig?.thinkingLevel,
     perModel,
     defaultThinking: getStore().agent.defaultThinking,
+    parentLevel: ctx.thinkingLevel,
   });
 }
 
@@ -198,8 +204,13 @@ export async function executeAgentTool(
   // spawn runner owns them (its trust-gated settings read keeps per-model
   // above defaultThinking; folding them into this explicit param would shadow
   // per-model). When the listener ran, it already injected the full chain.
-  const thinkingLevel =
-    parseThinkingLevel(params.thinking as string | undefined) ?? getAgentConfig(resolvedType)?.thinkingLevel;
+  // A `parent` value resolves here because the explicit param and the stored
+  // invocation must never carry it; the parent's level needs no trust gate.
+  const thinkingLevel = resolveThinkingLevel({
+    explicit: parseThinkingChoice(params.thinking as string | undefined),
+    frontmatter: getAgentConfig(resolvedType)?.thinkingLevel,
+    parentLevel: ctx.thinkingLevel,
+  });
 
   const coordinator = getCoordinator()!;
   // Background spawns (explicit or forceBackground) never bind to the parent
@@ -249,7 +260,12 @@ export async function executeAgentTool(
   return successResult(formatResultContent(record), details);
 }
 
-// --- Running agents list helper (used by executeStopAgentTool) ---
+// --- Agent id resolution and failure lists, shared by the agent tools ---
+
+/** The id form tool output prints and the model quotes back (ADR-0010). */
+function shortId(record: AgentRecord): string {
+  return record.id.slice(0, SHORT_ID_LENGTH);
+}
 
 /**
  * Build a compact list of running (or queued) agents.
@@ -262,7 +278,28 @@ function formatRunningAgents(): string {
 
   if (agents.length === 0) return "none";
 
-  return agents.map((a) => `${a.id.slice(0, SHORT_ID_LENGTH)} (${a.display.type})`).join(", ");
+  return agents.map((a) => `${shortId(a)} (${a.display.type})`).join(", ");
+}
+
+/**
+ * Resolve tool input to exactly one retained record: exact id, else an unambiguous
+ * prefix (ADR-0010). A blank id is a missing id, so resolution never sees a prefix
+ * that matches every record; ambiguity names every candidate by full id, the only
+ * place full ids are printed. `notFoundDetail` names the agents the calling tool can
+ * act on, because stop and message have opposite preconditions.
+ */
+function resolveAgent(agentId: unknown, notFoundDetail: () => string): AgentRecord {
+  const id = (agentId as string | undefined)?.trim() ?? "";
+  if (!id) throw new Error("agent_id is required");
+
+  const matches = getManager()!.matchAgents(id);
+  if (matches.length === 1) return matches[0];
+  if (matches.length > 1) {
+    throw new Error(
+      `Ambiguous agent id ${id}. Matching agents: ${matches.map((m) => m.id).join(", ")}. Use a longer id.`,
+    );
+  }
+  throw new Error(`Agent ${id} not found. ${notFoundDetail()}`);
 }
 
 // --- StopAgent execute handler ---
@@ -274,29 +311,66 @@ export async function executeStopAgentTool(
   _onUpdate: ((update: any) => void) | undefined,
   _ctx: ExtensionContext,
 ): Promise<any> {
-  const agentId = params.agent_id as string | undefined;
-
-  if (!agentId) {
-    throw new Error("agent_id is required");
-  }
-
-  const record = getManager()!.getRecord(agentId);
-
-  if (!record) {
-    throw new Error(`Agent ${agentId} not found. Running agents: ${formatRunningAgents()}`);
-  }
+  const manager = getManager()!;
+  const record = resolveAgent(params.agent_id, () => `Running agents: ${formatRunningAgents()}`);
 
   if (record.lifecycle.status !== "running" && record.lifecycle.status !== "queued") {
     return successResult(
-      `Agent ${agentId} is already ${record.lifecycle.status}. Running agents: ${formatRunningAgents()}`,
+      `Agent ${shortId(record)} is already ${record.lifecycle.status}. Running agents: ${formatRunningAgents()}`,
     );
   }
 
-  if (getManager()!.abort(agentId, "agent")) {
-    return successResult(`Stopped agent ${agentId.slice(0, SHORT_ID_LENGTH)}`);
+  if (manager.abort(record.id, "agent")) {
+    return successResult(`Stopped agent ${shortId(record)}`);
   }
 
-  throw new Error(`Failed to stop agent ${agentId}`);
+  throw new Error(`Failed to stop agent ${shortId(record)}`);
+}
+
+// --- MessageAgent execute handler ---
+
+/** Bounded list of every retained agent, settled ones included: a message needs a
+ * live session, not a run, so the addressable set is wider than StopAgent's.
+ */
+function formatKnownAgents(): string {
+  const agents = getManager()!.listAgents();
+  if (agents.length === 0) return "none";
+  return formatAgentStatusList(agents, getStore().agent.agentStatusLimit);
+}
+
+/**
+ * Give an existing agent more input through the manager's steer/continue seam: a
+ * running target takes the message at its next turn boundary, a settled target with
+ * a live session restarts on it. No agent is created and no queue is owned here. The
+ * report names what was queued, never a promise that it was read before the run ended.
+ */
+export async function executeMessageAgentTool(
+  _toolCallId: string,
+  params: Record<string, unknown>,
+  _signal: AbortSignal | undefined,
+  _onUpdate: ((update: any) => void) | undefined,
+  _ctx: ExtensionContext,
+): Promise<any> {
+  const text = (params.message as string | undefined)?.trim() ?? "";
+  if (!text) throw new Error("message is required");
+
+  const record = resolveAgent(params.agent_id, () => `Known agents: ${formatKnownAgents()}`);
+  const wasRunning = record.lifecycle.status === "running";
+
+  if (!wasRunning && !record.execution.session) {
+    return successResult(
+      `Agent ${shortId(record)} is ${record.lifecycle.status} with no live session. Message not sent.`,
+    );
+  }
+
+  if (!(await getManager()!.steer(record.id, text))) {
+    throw new Error(
+      `Failed to send message to agent ${shortId(record)}. ` +
+        `It may still be settling or its concurrency slot is full. Try again.`,
+    );
+  }
+
+  return successResult(wasRunning ? "Sent (steered)" : "Sent (continued)");
 }
 
 // --- Tool_call listener — inject model into Agent tool calls ---

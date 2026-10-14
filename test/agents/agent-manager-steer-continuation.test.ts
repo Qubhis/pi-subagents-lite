@@ -447,26 +447,65 @@ describe("AgentManager", () => {
     }
   });
 
-  it("steer on a running agent still delegates to session.steer (unchanged)", async () => {
+  it("delivers a steer sent before the session existed when that session is created, then delegates live steers in order", async () => {
     manager = new AgentManager(onComplete);
     const deferred = makeResolvablePromise();
     mockModules.mockRunAgent.mockReturnValue(deferred.promise);
     const id = spawnForeground("task");
     const record = manager.getRecord(id)!;
 
-    // No session yet: the message is queued as a pending steer.
     await expect(manager.steer(id, "early")).resolves.toBe(true);
     expect(record.execution.pendingSteers).toEqual(["early"]);
 
-    // Session arrives: pending steers flush, live steers delegate.
     const session = mockAgentSession();
+    const delivered = () => session.steer.mock.calls.map(([message]) => message);
+
     mockModules.mockRunAgent.mock.calls[0][3].onSessionCreated(session);
+    expect(delivered()).toEqual(["early"]);
+
     await expect(manager.steer(id, "later")).resolves.toBe(true);
-    expect(session.steer).toHaveBeenCalledWith("later");
+    expect(delivered()).toEqual(["early", "later"]);
     expect(mockModules.mockContinueAgentSession).not.toHaveBeenCalled();
 
     await settleRun(deferred);
     expect(record.execution.settled).toBe(true);
+  });
+
+  it("messaging a settled agent reuses its record rather than creating a second one", async () => {
+    manager = new AgentManager(onComplete);
+    const contRun = makeResolvablePromise();
+    mockModules.mockContinueAgentSession.mockReturnValue(contRun.promise);
+    const id = await spawnSettled();
+    const record = manager.getRecord(id)!;
+
+    await manager.steer(id, "keep going");
+
+    expect(manager.listAgents()).toEqual([record]);
+    expect(record.lifecycle.status).toBe("running");
+
+    await settleRun(contRun);
+    expect(manager.listAgents()).toEqual([record]);
+  });
+
+  it("continues an agent the user stopped, through its live session", async () => {
+    manager = new AgentManager(onComplete);
+    const firstRun = makeResolvablePromise();
+    mockModules.mockRunAgent.mockReturnValue(firstRun.promise);
+    const id = spawnForeground("first task");
+    const record = manager.getRecord(id)!;
+    mockModules.mockRunAgent.mock.calls[0][3].onSessionCreated(asAgentSession(mockAgentSession()));
+    manager.abort(id, "user");
+    await settleRun(firstRun);
+    expect(record.lifecycle.status).toBe("stopped");
+
+    const contRun = makeResolvablePromise();
+    mockModules.mockContinueAgentSession.mockReturnValue(contRun.promise);
+    await expect(manager.steer(id, "keep going")).resolves.toBe(true);
+
+    expect(record.lifecycle.status).toBe("running");
+    expect(mockModules.mockContinueAgentSession).toHaveBeenCalledOnce();
+
+    await settleRun(contRun);
   });
 
   it("does not continue a record that never settled (queued stop)", async () => {

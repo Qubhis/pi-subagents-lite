@@ -12,7 +12,7 @@
  *   6. parentModelId                   (inherit from parent)
  */
 
-import type { ThinkingLevel } from "../types.js";
+import type { ThinkingChoice } from "../types.js";
 import type { SystemPromptMode } from "../agents/types.js";
 import type { ModelThinkingPlacement } from "../config/types.js";
 
@@ -37,14 +37,16 @@ export interface SubagentsConfig {
     systemPromptMode?: SystemPromptMode;
     /** Whether to include AGENTS.md context files in the subagent system prompt. Default: true. */
     includeContextFiles?: boolean;
-    /** Default thinking level for spawned agents. Undefined = inherit from agent config. */
-    defaultThinking?: ThinkingLevel;
+    /** Default thinking level for spawned agents. Undefined = inherit from agent config; `parent` follows the parent session. */
+    defaultThinking?: ThinkingChoice;
     /** Default max turns for spawned agents. Undefined = unlimited. */
     defaultMaxTurns?: number;
     /** Global default for skills loading when agent doesn't explicitly set skills. true (default) or false. */
     loadSkillsImplicitly?: boolean;
     /** Global default for extensions loading when agent doesn't explicitly set extensions. true (default) or false. */
     loadExtensionsImplicitly?: boolean;
+    /** Global default for tools: ON delegates tool setup to pi (defaultTools applies); OFF starts new agents with no tools when frontmatter omits tool fields. Default true. */
+    loadToolsImplicitly?: boolean;
     /** When true, skip built-in default agents (general-purpose, Explore) at registration. */
     disableDefaultAgents?: boolean;
     /** When true, use strict-mode schema for the Agent tool. Costs more tokens due to nullable field encoding. */
