@@ -66,7 +66,7 @@ export async function executeAgentStatusTool(
   const manager = getManager()!;
   const agents = manager.listAgents();
 
-  const nudge = "Don't poll — you'll receive notifications when agents complete.";
+  const nudge = "REMINDER: You'll receive a notification when agents complete.";
 
   if (agents.length === 0) {
     return {
