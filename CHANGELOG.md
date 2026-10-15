@@ -7,12 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.17.0] - 2026-10-14
+
+### Added
+
+- **`parent` is a selectable Thinking level.** Agent files, `Subagent default thinking` and the spawn wizard accept it, and the Subagent then runs at the parent session's current level. It sits in the position you set it in, so a file's `parent` beats pi's per-model level but loses to a wizard pick, and it resolves before the Subagent exists, so nothing downstream can show the word. Nothing changes unless you select it.
+- **Pre-spawn menus name what decided the Thinking level.** Model settings and the spawn wizard read `high (frontmatter)` or `minimal (parent)` instead of a bare level, so an unexpected effort is traceable before you spawn. The widget, viewer and stats stay bare, because a running session stores only its number.
+- **Subagents are announced to Subagent-aware extensions.** Creation, binding and disposal are broadcast on pi's event bus, so a permission gate can raise an `ask` from inside a Subagent on the parent session. An announcement can never fail a spawn or a teardown.
+- **New `MessageAgent` tool feeds input to an existing agent.** A running agent takes it at its next turn boundary; a settled agent with a live session continues on it, context intact, with no second record.
+- **Short agent IDs work in `StopAgent` and `MessageAgent`.** The 8-character ID the tools print is accepted when it matches one agent; an ambiguous prefix acts on none and names every candidate.
+
+### Changed
+
+- **The setting row is now `Subagent default thinking`.** Label only, the key stays `defaultThinking`, and it no longer collides with pi's own `defaultThinkingLevel`. Unset reads `pi default`, and `pi default` in the list removes the key at the chosen layer.
+
+### Fixed
+
+- **An untrusted spawn target no longer hides your global per-model Thinking level.** The gate discarded pi's whole `modelThinkingLevels` map rather than only the untrusted project's file, so the run ignored a level that Model settings printed.
+- **Both Thinking level annotations follow the same parent level.** Model settings fell back to the current session context and the wizard did not, so the two rows disagreed about one run.
+- **A Thinking level picked in the spawn wizard is clamped to the model the Subagent gets.** Choosing `(inherits parent)` was the one model change that skipped the clamp.
+- **The spawn wizard reads pi's per-model level for the model the Subagent actually runs on.** It used the parent's model even where the agent file pins another, so it offered levels that model cannot run.
+
+## [1.16.0] - 2026-10-05
+
+### Added
+
+- **Extension tool aliases accept `extension/all` as well as `extension/*`.** Both forms include or exclude all tools from the named extension.
+- **New config setting `loadToolsImplicitly` (default ON, `/agents` > System Prompt).** When frontmatter omits the tool fields, ON makes the Subagent behave like a normal session: pi's `defaultTools` applies unchanged and inactive tools stay registered for dispatcher tools. OFF starts it with no tools. Explicit frontmatter always wins.
+
+### Changed
+
+- **Child sessions load pi's built-in extensions** (codemode, tool-search, mcp; llama.cpp excluded). They are addressable by bare name (`codemode`) from `defaultTools`, settings `extensions`, and frontmatter `extensions`/`exclude_extensions`, exactly as in a normal session. Requires pi >= 0.99.0.
+- **A silent agent config no longer snapshots `defaultTools` into a registry allowlist.** pi owns tool fallbacks, so dispatcher tools can reach inactive and late-registered tools.
+
+### Fixed
+
+- **Extension tool aliases use the owning package name.** Package extension entries under paths like `src/index.ts` now resolve to their declared package name instead of `src`.
+- **No more child-session leaks.** Every child session terminates through one idempotent disposal (abort, `session_shutdown`, dispose) — whether it settles, stops, is cleared, outlives its record, or fails during setup — releasing built-in extension resources exactly once.
+
+## [1.15.1] - 2026-09-30
+
+### Fixed
+
+- **OpenAI Responses token injection preserves ChatGPT sign-in compatibility.** The subagent output-limit hook now overrides pi's existing `max_output_tokens` but doesn't restore the field when pi omitted it for Sign in with ChatGPT credentials.
+- **Context percentage respects its own widget visibility setting.** It remains visible when input and output token counts are hidden.
+
+## [1.15.0] - 2026-09-24
+
 ### Changed
 
 - **The conversation viewer no longer shows tool results.** Each tool call renders as a single status-colored line (tool name + args summary, pending → success/error background); result content never renders, inline under a call or as a standalone result block. Thinking, assistant text, steering, stop, and scrolling are unchanged, as is the parent chat's Agent tool display and the text the model receives.
-- Running agents navigation tests exercise real keyboard input instead of simulating private selection state. Duplicate label coverage is removed, with production behavior unchanged.
-- Agent continuation tests synchronize through prompt and completion signals instead of polling. Runner tests are split by behavior, with production behavior unchanged.
-- Prompt tests use Pi's real skill formatter instead of duplicated or canned output. Skill fixtures use isolated temporary repositories, without filesystem spies or checkout-dependent ancestor walks.
 
 ## [1.14.0] - 2026-09-16
 

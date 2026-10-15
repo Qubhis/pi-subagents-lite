@@ -20,7 +20,7 @@ import type { SessionModelOverrides, SubagentsConfig } from "../src/models/model
 import type { SpawnIntent } from "../src/spawn/spawn-coordinator.js";
 import type { SelectOption } from "../src/ui/searchable-select.js";
 import type { Theme } from "../src/ui/types.js";
-import type { ThinkingLevel } from "../src/types.js";
+import type { ThinkingChoice, ThinkingLevel } from "../src/types.js";
 
 // Create the mutable mock state via vi.hoisted so the vi.mock factories
 // (which vitest hoists above the rest of the module) can reference it.
@@ -56,6 +56,7 @@ const hoisted = vi.hoisted(() => {
     provider: "test",
     id: "parent-model",
   };
+  const parentThinkingLevel: ThinkingLevel = "medium";
   /** The model subset the fake registry resolves; src reads provider/id (+reasoning). */
   interface FakeModel {
     provider: string;
@@ -83,8 +84,12 @@ const hoisted = vi.hoisted(() => {
     },
     // TS 7 (native tsc) infers the control-flow-narrowed type of the annotated const
     // for object-literal properties, losing the `| undefined` (verified in isolation
-    // under 7.0.2); the assertion keeps the union so tests can toggle model off.
+    // under 7.0.2); the assertions keep the unions so tests can toggle model off
+    // and install another thinking level.
     model: parentModel as { provider: string; id: string } | undefined,
+    // The level on the context stored at session_start (the one a spawn runs
+    // against); annotated menus read the command context's own level.
+    thinkingLevel: parentThinkingLevel as ThinkingLevel,
     cwd: "/test",
   };
 
@@ -109,6 +114,8 @@ const hoisted = vi.hoisted(() => {
     mockSessionShowCost,
     mockManager,
     mockSessionCtx,
+    parentModel,
+    parentThinkingLevel,
     mockPiExec,
     mockPiInstance,
   };
@@ -147,6 +154,11 @@ export function resetConfig(): void {
   mockModules.mockProjectTargetOffered = false;
   mockModules.mockStoreOverride = null;
   mockModules.mockSessionShowCost = undefined;
+  // The parent session's model and live level are mutated by tests that switch
+  // models or follow the parent; both return to the default here so a later
+  // test cannot read a model or level an earlier test installed.
+  mockModules.mockSessionCtx.model = hoisted.parentModel;
+  mockModules.mockSessionCtx.thinkingLevel = hoisted.parentThinkingLevel;
   mockModules.mockManager.setConcurrency.mockReset();
   mockModules.mockManager.listAgents.mockReset();
   mockModules.mockManager.getRecord.mockReset();
@@ -165,7 +177,6 @@ vi.mock("../src/agents/agent-types.js", () => ({
   getAgentConfig: vi.fn(),
   getAvailableTypes: vi.fn(() => ["general-purpose", "Explore"]),
   getAllTypes: vi.fn(() => ["general-purpose", "Explore"]),
-  getToolNamesForType: vi.fn(() => ["read", "bash", "edit", "write"]),
   resolveType: vi.fn((name: string) => ({ kind: "resolved", key: name })),
   discoverNewAgents: vi.fn(async () => 0),
 }));
@@ -274,6 +285,7 @@ vi.mock("../src/shell.js", async () => {
         defaultMaxTurns: a.defaultMaxTurns,
         loadSkillsImplicitly: a.loadSkillsImplicitly !== false,
         loadExtensionsImplicitly: a.loadExtensionsImplicitly !== false,
+        loadToolsImplicitly: a.loadToolsImplicitly !== false,
         showTools: a.showTools === true,
         showTurns: a.showTurns !== false,
         showInput: a.showInput !== false,
@@ -432,7 +444,7 @@ vi.mock("../src/shell.js", async () => {
         setIncludeContextFiles(enabled: boolean) {
           mockModules.mockConfig.agent.includeContextFiles = enabled;
         },
-        setDefaultThinking(level: ThinkingLevel | undefined, target: string = "global") {
+        setDefaultThinking(level: ThinkingChoice | undefined, target: "global" | "project" = "global") {
           const agent = target === "project" ? mockModules.mockProjectConfig.agent : mockModules.mockConfig.agent;
           if (level === undefined) delete agent.defaultThinking;
           else agent.defaultThinking = level;

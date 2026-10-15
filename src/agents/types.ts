@@ -1,4 +1,4 @@
-import type { ThinkingLevel } from "../types.js";
+import type { ThinkingChoice, ThinkingLevel } from "../types.js";
 
 export type SubagentType = string;
 
@@ -15,7 +15,7 @@ export interface AgentConfig {
   /**
    * Controls which tool schemas the LLM sees. Can reference built-in tools
    * and extension tools. true = all, string[] = listed, false = none.
-   * Supports ext/* syntax to include all tools from an extension.
+   * Supports ext/* and ext/all syntax to include all tools from an extension.
    * Mutually exclusive with excludeTools.
    */
   tools?: true | string[] | false;
@@ -31,7 +31,8 @@ export interface AgentConfig {
   preloadSkills?: string[] | false;
   color?: string;
   model?: string;
-  thinkingLevel?: ThinkingLevel;
+  /** Frontmatter `thinking`: a concrete level, or `parent` to follow the parent session. */
+  thinkingLevel?: ThinkingChoice;
   maxTurns?: number;
   /** Max output tokens per LLM response. Passed to provider as max_tokens or max_completion_tokens. */
   maxTokens?: number;
