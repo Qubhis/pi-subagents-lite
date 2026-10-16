@@ -3,7 +3,29 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { type LifetimeUsage, addUsage, getLifetimeTotal, formatTokens, formatCost } from "../../src/agents/usage.js";
+import {
+  type LifetimeUsage,
+  type SessionLike,
+  addUsage,
+  getLifetimeTotal,
+  formatTokens,
+  formatCost,
+  getSessionContextInfo,
+  getSessionContextPercent,
+  resolveContextInfo,
+  formatContextSummary,
+} from "../../src/agents/usage.js";
+
+/** Minimal SessionLike whose getSessionStats returns the given contextUsage. */
+function sessionWith(contextUsage: unknown): SessionLike {
+  return {
+    getSessionStats: () =>
+      ({
+        tokens: { input: 0, output: 0, cacheWrite: 0 },
+        contextUsage,
+      }) as ReturnType<SessionLike["getSessionStats"]>,
+  };
+}
 
 /* ------------------------------------------------------------------ */
 /*  addUsage — cost accumulation                                       */
@@ -121,5 +143,90 @@ describe("formatCost", () => {
 
   it("formats very small cost as $0.00", () => {
     expect(formatCost(0.001)).toBe("$0.00");
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  getSessionContextInfo / getSessionContextPercent                   */
+/* ------------------------------------------------------------------ */
+
+describe("getSessionContextInfo", () => {
+  it("reads tokens, contextWindow, and percent from the session", () => {
+    const session = sessionWith({ tokens: 60000, contextWindow: 200000, percent: 30 });
+    expect(getSessionContextInfo(session)).toEqual({ tokens: 60000, contextWindow: 200000, percent: 30 });
+  });
+
+  it("returns all-null when the session is undefined", () => {
+    expect(getSessionContextInfo(undefined)).toEqual({ tokens: null, contextWindow: null, percent: null });
+  });
+
+  it("returns all-null when contextUsage is absent (e.g. post-compaction)", () => {
+    expect(getSessionContextInfo(sessionWith(undefined))).toEqual({
+      tokens: null,
+      contextWindow: null,
+      percent: null,
+    });
+  });
+
+  it("maps missing individual fields to null", () => {
+    const session = sessionWith({ percent: 42 });
+    expect(getSessionContextInfo(session)).toEqual({ tokens: null, contextWindow: null, percent: 42 });
+  });
+
+  it("returns all-null when getSessionStats throws", () => {
+    const session: SessionLike = {
+      getSessionStats: () => {
+        throw new Error("boom");
+      },
+    };
+    expect(getSessionContextInfo(session)).toEqual({ tokens: null, contextWindow: null, percent: null });
+  });
+
+  it("getSessionContextPercent projects just the percent", () => {
+    expect(getSessionContextPercent(sessionWith({ tokens: 10, contextWindow: 20, percent: 50 }))).toBe(50);
+    expect(getSessionContextPercent(undefined)).toBe(null);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  resolveContextInfo — live first, else stored (retro analysis)      */
+/* ------------------------------------------------------------------ */
+
+describe("resolveContextInfo", () => {
+  it("prefers live session values over stored ones", () => {
+    const session = sessionWith({ tokens: 60000, contextWindow: 200000, percent: 30 });
+    const stored = { contextTokens: 1, contextWindow: 2, contextPercent: 3 };
+    expect(resolveContextInfo(session, stored)).toEqual({ tokens: 60000, contextWindow: 200000, percent: 30 });
+  });
+
+  it("falls back to stored values for a settled agent (no live session)", () => {
+    const stored = { contextTokens: 125000, contextWindow: 200000, contextPercent: 63 };
+    expect(resolveContextInfo(undefined, stored)).toEqual({ tokens: 125000, contextWindow: 200000, percent: 63 });
+  });
+
+  it("returns all-null when neither live nor stored values exist", () => {
+    expect(resolveContextInfo(undefined, {})).toEqual({ tokens: null, contextWindow: null, percent: null });
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  formatContextSummary — compact one-liner                           */
+/* ------------------------------------------------------------------ */
+
+describe("formatContextSummary", () => {
+  it("shows tokens/window and percent", () => {
+    expect(formatContextSummary({ tokens: 73000, contextWindow: 200000, percent: 37 })).toBe("73k/200k ctx 37%");
+  });
+
+  it("omits the window when it is unknown", () => {
+    expect(formatContextSummary({ tokens: 73000, contextWindow: null, percent: 37 })).toBe("73k ctx 37%");
+  });
+
+  it("shows just the percent when tokens are unknown", () => {
+    expect(formatContextSummary({ tokens: null, contextWindow: null, percent: 37 })).toBe("37%");
+  });
+
+  it("returns null when nothing is available", () => {
+    expect(formatContextSummary({ tokens: null, contextWindow: null, percent: null })).toBe(null);
   });
 });

@@ -31,7 +31,7 @@ export function addUsage(into: LifetimeUsage, delta: LifetimeUsage): void {
 /** Minimal shape we read from upstream `getSessionStats()`. */
 type SessionStatsLike = {
   tokens: { input: number; output: number; cacheWrite: number };
-  contextUsage?: { percent: number | null };
+  contextUsage?: { tokens?: number | null; contextWindow?: number | null; percent: number | null };
 };
 export type SessionLike = { getSessionStats(): SessionStatsLike };
 
@@ -48,14 +48,71 @@ export function formatCost(cost: number): string {
 }
 
 /**
+ * Context-window snapshot: current token occupancy, the model's context-window
+ * size, and utilization percent. Each field is null when unavailable (no
+ * session, no model contextWindow, or post-compaction before the next response).
+ */
+export type ContextInfo = { tokens: number | null; contextWindow: number | null; percent: number | null };
+
+const EMPTY_CONTEXT_INFO: ContextInfo = { tokens: null, contextWindow: null, percent: null };
+
+/** Live context-window snapshot read from the session, or an all-null snapshot when unavailable. */
+export function getSessionContextInfo(session: SessionLike | undefined): ContextInfo {
+  if (!session) return EMPTY_CONTEXT_INFO;
+  try {
+    const usage = session.getSessionStats().contextUsage;
+    return {
+      tokens: usage?.tokens ?? null,
+      contextWindow: usage?.contextWindow ?? null,
+      percent: usage?.percent ?? null,
+    };
+  } catch {
+    return EMPTY_CONTEXT_INFO;
+  }
+}
+
+/**
  * Context-window utilization (0–100), or null when unavailable
  * (no model contextWindow, or post-compaction before the next response).
  */
 export function getSessionContextPercent(session: SessionLike | undefined): number | null {
-  if (!session) return null;
-  try {
-    return session.getSessionStats().contextUsage?.percent ?? null;
-  } catch {
-    return null;
+  return getSessionContextInfo(session).percent;
+}
+
+/** Context fields captured on a record's stats at settlement, for settled-agent (retro) reads. */
+export type StoredContext = {
+  contextTokens?: number | null;
+  contextWindow?: number | null;
+  contextPercent?: number | null;
+};
+
+/**
+ * Effective context snapshot: the live session value when present, else the
+ * value stored on the record at settlement. Lets both running agents (live)
+ * and ended agents (retro analysis) report tokens, window, and percent.
+ */
+export function resolveContextInfo(session: SessionLike | undefined, stored: StoredContext): ContextInfo {
+  const live = getSessionContextInfo(session);
+  return {
+    tokens: live.tokens ?? stored.contextTokens ?? null,
+    contextWindow: live.contextWindow ?? stored.contextWindow ?? null,
+    percent: live.percent ?? stored.contextPercent ?? null,
+  };
+}
+
+/**
+ * Compact one-line context summary, e.g. "73k/200k ctx 37%" or "73k ctx 37%",
+ * or null when no context data is available. Token counts use the compact form.
+ */
+export function formatContextSummary(info: ContextInfo): string | null {
+  const parts: string[] = [];
+  if (info.tokens != null) {
+    parts.push(
+      info.contextWindow != null
+        ? `${formatTokens(info.tokens, true)}/${formatTokens(info.contextWindow, true)} ctx`
+        : `${formatTokens(info.tokens, true)} ctx`,
+    );
   }
+  if (info.percent != null) parts.push(`${Math.round(info.percent)}%`);
+  return parts.length > 0 ? parts.join(" ") : null;
 }

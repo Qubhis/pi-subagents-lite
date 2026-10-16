@@ -13,10 +13,16 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentRecord } from "../types.js";
 import { SHORT_ID_LENGTH } from "../types.js";
 import { getManager, getStore } from "../shell.js";
+import { formatContextSummary, resolveContextInfo } from "./usage.js";
 
 function formatAgent(record: AgentRecord): string {
   const shortId = record.id.slice(0, SHORT_ID_LENGTH);
-  return `${shortId} (${record.display.type}) ${record.lifecycle.status}`;
+  const base = `${shortId} (${record.display.type}) ${record.lifecycle.status}`;
+  // Running agents read live context; settled agents read what was captured at
+  // completion, so retro status listings still show their final context size.
+  // Optional chaining keeps partial records (test fixtures) from throwing.
+  const summary = formatContextSummary(resolveContextInfo(record.execution?.session, record.stats ?? {}));
+  return summary ? `${base} [${summary}]` : base;
 }
 
 /** In-progress agents are always shown; every other status is settled (issue constraints). */

@@ -68,6 +68,7 @@ export const DEFAULT_AGENT: SubagentsConfig["agent"] = {
   finishedRetentionMinutes: 1,
   /** 0 = auto: the AgentStatus settled limit derives as 2 × default concurrency at read time. */
   agentStatusLimit: 0,
+  contextNotifyThreshold: 0,
   modelDisplayStyle: "name",
   modelThinkingPlacement: "header",
   statusBarFormat: "full",

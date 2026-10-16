@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`AgentStatus`, agent details, and completion results now report context size.** Each agent line carries its context occupancy (e.g. `[73k/200k ctx 37%]`) read live for running agents and from values captured at completion for settled ones, so you can judge a Subagent's context load without polling and review it after it finishes.
+- **Orchestrator notification when a Subagent's context grows large.** New `contextNotifyThreshold` setting (tokens; `0`/absent = disabled). When a running Subagent's context first reaches the threshold, its orchestrator is messaged once per run (steered while it runs, delivered as a follow-up while idle) so it can stop or steer the Subagent before quality degrades. The final completion result also states the Subagent's context size.
+
 ## [1.17.0] - 2026-10-14
 
 ### Added

@@ -13,7 +13,7 @@ import type { AgentRecord, ThinkingLevel } from "../types.js";
 import { SHORT_ID_LENGTH } from "../types.js";
 import type { AgentConfig } from "./types.js";
 import { resolveType, getAgentConfig, resolveTypeOrDiscover, type TypeResolution } from "./agent-types.js";
-import { getSessionContextPercent } from "./usage.js";
+import { resolveContextInfo } from "./usage.js";
 import { computeSpawnTarget, surfaceSpawnTargetWarnings } from "../spawn/spawn-target.js";
 
 import { parseModelKey, findModelInRegistry, parseThinkingChoice } from "../utils.js";
@@ -123,7 +123,10 @@ export function buildAgentDetails(
     details.toolUses = record.stats.toolUses;
     details.input = record.stats.lifetimeUsage.input;
     details.output = record.stats.lifetimeUsage.output;
-    details.contextPercent = getSessionContextPercent(record.execution.session);
+    const contextInfo = resolveContextInfo(record.execution.session, record.stats);
+    details.contextTokens = contextInfo.tokens;
+    details.contextWindow = contextInfo.contextWindow;
+    details.contextPercent = contextInfo.percent;
     details.durationMs = elapsedMs;
     details.compactions = record.stats.compactionCount;
     details.modelName = record.execution.session?.model?.name ?? record.display.invocation?.modelName;
@@ -386,18 +389,18 @@ export async function toolCallListener(event: ToolCallEvent, ctx: ExtensionConte
 
   const effectiveModel = getStore().modelFor(subagentType ?? "general-purpose", parentModelId, agentConfig);
 
-  // Respect an explicitly-passed model (spawn-time override). Only inject the                                                                        
-  // configured/default model when the caller did not set one — mirrors the                                                                           
-  // thinking branch below.                                                                                                                           
-  if (input.model === undefined && effectiveModel) {                                                                                                  
-    input.model = effectiveModel;                                                                                                                     
-  }                                                                                                                                                   
-  if (input.model) {                                                                                                                                  
-    const parsed = parseModelKey(input.model as string);                                                                                              
-    if (parsed) {                                                                                                                                     
-      input._modelOverride = parsed.modelId;                                                                                                          
-   }                                                                                                                                                 
-  } 
+  // Respect an explicitly-passed model (spawn-time override). Only inject the
+  // configured/default model when the caller did not set one — mirrors the
+  // thinking branch below.
+  if (input.model === undefined && effectiveModel) {
+    input.model = effectiveModel;
+  }
+  if (input.model) {
+    const parsed = parseModelKey(input.model as string);
+    if (parsed) {
+      input._modelOverride = parsed.modelId;
+    }
+  }
 
   // Inject the spawn-effective thinking when the call carries none. The
   // injected value becomes the explicit param at execution, so it must mirror

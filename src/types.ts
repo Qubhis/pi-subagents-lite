@@ -182,6 +182,13 @@ export interface AgentExecutionState {
    */
   settlementCount: number;
   /**
+   * One-shot guard for the context-threshold notification: set true the first
+   * time this run's context tokens cross the configured threshold, reset to
+   * false when a settled agent is continued. Undefined (falsy) until the first
+   * crossing so each run notifies the orchestrator at most once.
+   */
+  contextAlertSent?: boolean;
+  /**
    * Spawning-session ExtensionContext, attached by the coordinator at spawn
    * for every spawn. Kept for the record's lifetime so the UI-notify
    * fallback can reach a live context on any later nudge (continuations of
@@ -227,4 +234,8 @@ export interface AgentAccumulatedStats {
   compactionCount: number;
   /** Last-known context usage percentage (0–100), captured at completion. */
   contextPercent?: number | null;
+  /** Last-known context token occupancy (current window usage), captured at completion. For retro analysis of ended agents. */
+  contextTokens?: number | null;
+  /** Model context-window size, captured at completion. For retro analysis of ended agents. */
+  contextWindow?: number | null;
 }

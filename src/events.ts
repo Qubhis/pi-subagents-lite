@@ -55,6 +55,10 @@ export function ensureManagerAndWidget(): void {
       invalidateAgentRow(record.id);
       getWidget()?.update();
     });
+
+    newManager.setOnContextAlert((record, info) => {
+      coordinator.onContextAlert(record, info);
+    });
   }
 
   if (!currentWidget) {

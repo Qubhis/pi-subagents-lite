@@ -82,6 +82,8 @@ export interface SubagentsConfig {
     modelThinkingPlacement?: ModelThinkingPlacement;
     /** Status bar format: 'full' (default) or 'compact'. */
     statusBarFormat?: "full" | "compact";
+    /** Context token count at which a running subagent notifies its orchestrator (once per run). 0 or absent = disabled. */
+    contextNotifyThreshold?: number;
     [agentType: string]: string | null | undefined | boolean | number;
   };
   concurrency: {

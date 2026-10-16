@@ -126,6 +126,8 @@ export interface ResolvedAgentSettings {
   readonly finishedRetentionMinutes: number;
   /** Max settled agents the AgentStatus tool lists. Auto default: 2 × configured default concurrency. */
   readonly agentStatusLimit: number;
+  /** Context token count at which a running subagent notifies its orchestrator (once per run). 0 = disabled. */
+  readonly contextNotifyThreshold: number;
   /** Model display format: 'id' (short) or 'name' (full). */
   readonly modelDisplayStyle: "id" | "name";
   /** Model/thinking placement in full mode: 'header' (1st line) or 'metadata' (2nd line). */
@@ -232,6 +234,7 @@ export class ConfigStore {
       outputThinkingBufferSize: a.outputThinkingBufferSize ?? 0,
       finishedRetentionMinutes: Math.max(MIN_FINISHED_RETENTION_MINUTES, a.finishedRetentionMinutes ?? 1),
       agentStatusLimit: canonicalAgentStatusLimit(a.agentStatusLimit) || 2 * this.concurrency.default,
+      contextNotifyThreshold: Math.max(0, a.contextNotifyThreshold ?? 0),
       modelDisplayStyle: a.modelDisplayStyle === "id" ? "id" : "name",
       modelThinkingPlacement: a.modelThinkingPlacement === "metadata" ? "metadata" : "header",
       statusBarFormat: a.statusBarFormat === "compact" ? "compact" : "full",
