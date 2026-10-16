@@ -36,6 +36,7 @@ describe("ConfigStore reads", () => {
     expect(store.agent.toolTimeoutMinutes).toBe(45);
     expect(store.agent.idleTimeoutMinutes).toBe(45);
     expect(store.agent.showAgentColors).toBe(true);
+    expect(store.agent.contextNotifyThreshold).toBe(0);
   });
 
   it("derives widgetMaxLinesCompact from widgetMaxLines when absent", () => {
@@ -74,6 +75,15 @@ describe("ConfigStore reads", () => {
     expect(store.agent.widgetMaxLinesCompact).toBe(7);
     expect(store.concurrency.default).toBe(2);
     expect(store.agent.defaultModel).toBe("config/default");
+  });
+
+  it("reads contextNotifyThreshold and clamps negatives to 0", () => {
+    expect(
+      new ConfigStore(memIO({ global: { agent: { contextNotifyThreshold: 120000 } } }).io).agent.contextNotifyThreshold,
+    ).toBe(120000);
+    expect(
+      new ConfigStore(memIO({ global: { agent: { contextNotifyThreshold: -5 } } }).io).agent.contextNotifyThreshold,
+    ).toBe(0);
   });
 });
 
@@ -681,6 +691,7 @@ describe("ConfigStore model-override clearing", () => {
           showCost: true,
           widgetMaxLines: 14,
           showCompletionCards: true,
+          contextNotifyThreshold: 120000,
           defaultThinking: "high",
           defaultMaxTurns: 30,
           Explore: "m1",
@@ -704,6 +715,7 @@ describe("ConfigStore model-override clearing", () => {
     expect(snap.showCost).toBe(true);
     expect(snap.widgetMaxLines).toBe(14);
     expect(snap.showCompletionCards).toBe(true);
+    expect(snap.contextNotifyThreshold).toBe(120000);
   });
 
   it("clearAllModelOverrides at session resets only the session layer", () => {

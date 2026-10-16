@@ -88,6 +88,7 @@ const AGENT_KEY_SPECS: Record<string, KeySpec> = {
   outputThinkingBufferSize: NUM,
   finishedRetentionMinutes: NUM,
   agentStatusLimit: NUM,
+  contextNotifyThreshold: NUM,
   modelDisplayStyle: MODEL_DISPLAY,
   modelThinkingPlacement: THINKING_PLACEMENT,
   statusBarFormat: STATUS_BAR,

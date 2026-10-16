@@ -136,6 +136,32 @@ describe("AgentStatus tool execute behavior", () => {
 
     expect(result.isError).toBeUndefined();
   });
+
+  it("appends the context summary from stored stats (settled, retro analysis)", async () => {
+    mockListAgents.mockReturnValue([
+      {
+        id: "ctx12345ctx12345",
+        display: { type: "Explore" },
+        lifecycle: { status: "completed" },
+        stats: { contextTokens: 125000, contextWindow: 200000, contextPercent: 63 },
+      },
+    ]);
+
+    const result = await executeAgentStatusTool("call_ctx", {}, undefined, undefined, asExtensionContext({}));
+
+    expect(result.content[0].text).toContain("ctx12345 (Explore) completed [125k/200k ctx 63%]");
+  });
+
+  it("omits the context summary when no context data is available", async () => {
+    mockListAgents.mockReturnValue([
+      { id: "noctx000noctx000", display: { type: "builder" }, lifecycle: { status: "running" } },
+    ]);
+
+    const result = await executeAgentStatusTool("call_noctx", {}, undefined, undefined, asExtensionContext({}));
+
+    expect(result.content[0].text).toContain("noctx000 (builder) running");
+    expect(result.content[0].text).not.toContain("[");
+  });
 });
 
 /* ------------------------------------------------------------------ */

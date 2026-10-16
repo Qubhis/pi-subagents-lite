@@ -21,7 +21,7 @@ import {
 } from "../types.js";
 import type { SubagentType } from "./types.js";
 import { getAgentConfig } from "./agent-types.js";
-import { addUsage, getLifetimeTotal, getSessionContextPercent } from "./usage.js";
+import { addUsage, getLifetimeTotal, getSessionContextInfo, type ContextInfo } from "./usage.js";
 import { errorMessage, toSingleLine } from "../utils.js";
 import { DEFAULT_GRACE_TURNS } from "../config/config-io.js";
 
@@ -63,6 +63,8 @@ export interface ConcurrencyConfig {
 
 type OnAgentComplete = (record: AgentRecord) => void;
 type OnAgentStart = (record: AgentRecord) => void;
+/** Fired once per run when a running agent's context tokens first cross the configured threshold. */
+export type OnContextAlert = (record: AgentRecord, info: ContextInfo) => void;
 
 interface ConcurrencySlot {
   limit: number;
@@ -89,6 +91,7 @@ export class AgentManager {
   private watchdogInterval: ReturnType<typeof setInterval>;
   private onComplete?: OnAgentComplete;
   private onStart?: OnAgentStart;
+  private onContextAlert?: OnContextAlert;
 
   /** Completion-gate resolvers for every spawned record, keyed by agent id. The gate
    * (record.execution.promise) is created at spawn and opened exactly once at the record's
@@ -134,7 +137,10 @@ export class AgentManager {
       this.applyConcurrencyEntry(this.concurrencySlots, modelKey, limit);
     }
 
-    this.watchdogInterval = setInterval(() => this.checkWatchdogs(), WATCHDOG_TICK_MS);
+    this.watchdogInterval = setInterval(() => {
+      this.checkWatchdogs();
+      this.checkContextThresholds();
+    }, WATCHDOG_TICK_MS);
     this.watchdogInterval.unref();
   }
 
@@ -385,7 +391,10 @@ export class AgentManager {
           record.error = formatModelError(record.display.type, session?.model, modelError);
         }
         record.execution.session = session;
-        record.stats.contextPercent = getSessionContextPercent(session);
+        const contextInfo = getSessionContextInfo(session);
+        record.stats.contextPercent = contextInfo.percent;
+        record.stats.contextTokens = contextInfo.tokens;
+        record.stats.contextWindow = contextInfo.contextWindow;
         record.lifecycle.completedAt ??= Date.now();
         return responseText;
       })
@@ -486,6 +495,11 @@ export class AgentManager {
 
   setOnComplete(cb: OnAgentComplete): void {
     this.onComplete = cb;
+  }
+
+  /** Wire the context-threshold notification sink (coordinator pushes to the orchestrator). */
+  setOnContextAlert(cb: OnContextAlert): void {
+    this.onContextAlert = cb;
   }
 
   /** Get the session-level cumulative agent cost. Survives record removal (Clear/dispose). */
@@ -625,6 +639,8 @@ export class AgentManager {
     // A stale idle clock from the first run would kill the continuation
     // immediately — restart the watchdog before the new turn begins.
     this.watchdog.start(record.id);
+    // A fresh run re-arms the one-shot context-threshold notification.
+    record.execution.contextAlertSent = false;
 
     const previousTurns = record.stats.turnCount ?? 0;
     const promise = continueAgentSession(session, message, {
@@ -746,6 +762,29 @@ export class AgentManager {
     );
     for (const [id, detail] of decisions) {
       this.abort(id, "watchdog", detail);
+    }
+  }
+
+  /**
+   * Notify the orchestrator once when a running agent's context tokens first
+   * reach the configured threshold, so it need not poll AgentStatus. The
+   * threshold is read live so JSON/menu changes apply to running agents; 0
+   * disables. One-shot per run (re-armed on continuation).
+   */
+  private checkContextThresholds(): void {
+    const threshold = getStore().agent.contextNotifyThreshold;
+    if (!(threshold > 0)) return;
+    for (const record of this.agents.values()) {
+      if (record.lifecycle.status !== "running") continue;
+      if (record.execution.contextAlertSent) continue;
+      const info = getSessionContextInfo(record.execution.session);
+      if (info.tokens == null || info.tokens < threshold) continue;
+      record.execution.contextAlertSent = true;
+      try {
+        this.onContextAlert?.(record, info);
+      } catch {
+        /* ignore */
+      }
     }
   }
 

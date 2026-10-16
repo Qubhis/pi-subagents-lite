@@ -150,6 +150,24 @@ describe("validateRawLayer — model keys", () => {
 });
 
 describe("validateRawLayer — non-model keys", () => {
+  it("keeps a numeric contextNotifyThreshold and drops a non-number one with a warning", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(validateRawLayer({ agent: { contextNotifyThreshold: 120000 } }, "/g.json").agent).toEqual({
+        contextNotifyThreshold: 120000,
+      });
+      expect(warn).not.toHaveBeenCalled();
+
+      const cleaned = validateRawLayer({ agent: { contextNotifyThreshold: "big", showCost: true } }, "/g.json");
+      expect(cleaned.agent).toEqual({ showCost: true });
+      const msg = warn.mock.calls[0][0] as string;
+      expect(msg).toContain("agent.contextNotifyThreshold");
+      expect(msg).toContain("number");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("drops a mistyped non-model key with file, key, got, expected, and fix hint", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {

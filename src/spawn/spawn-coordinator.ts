@@ -1,10 +1,11 @@
-import { getPiInstance, getSessionCtx, getWidget } from "../shell.js";
+import { getPiInstance, getSessionCtx, getStore, getWidget } from "../shell.js";
 import { SHORT_ID_LENGTH } from "../types.js";
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentRecord, LiveView, SpawnConfig, ToolActivity } from "../types.js";
 import type { AgentManager, SpawnOptions } from "../agents/agent-manager.js";
 import { buildAgentDetails, formatResultContent } from "../agents/tool-execution.js";
+import { formatContextSummary, formatTokens, resolveContextInfo, type ContextInfo } from "../agents/usage.js";
 
 /**
  * spawn-coordinator.ts — Spawn-and-track coordination for subagents.
@@ -160,6 +161,50 @@ export class SpawnCoordinator {
     this.disposed = true;
   }
 
+  /**
+   * Push a one-shot context-threshold alert to the orchestrator so it need not
+   * poll AgentStatus. Delivery mirrors the completion nudge: steer while the
+   * parent runs, followUp while idle. Called by AgentManager's onContextAlert.
+   */
+  onContextAlert(record: AgentRecord, info: ContextInfo): void {
+    if (this.disposed) return;
+    const pi = getPiInstance();
+    if (!pi) return;
+
+    const threshold = getStore().agent.contextNotifyThreshold;
+    const summary = formatContextSummary(info) ?? "an unknown size";
+    const shortId = record.id.slice(0, SHORT_ID_LENGTH);
+
+    try {
+      const ctx = getSessionCtx();
+      const parentIdle = ctx?.isIdle?.() ?? true;
+      const deliverAs = parentIdle ? "followUp" : "steer";
+      pi.sendMessage(
+        {
+          customType: "subagent-context-alert",
+          content:
+            `[Subagent "${record.display.type}" ${shortId} ${record.lifecycle.status}] context reached ${summary}, ` +
+            `at or above the configured ${formatTokens(threshold, true)} token threshold. ` +
+            `Consider stopping or steering it before output quality degrades.`,
+          display: true,
+        },
+        {
+          deliverAs,
+          triggerTurn: true,
+        },
+      );
+    } catch {
+      const spawnCtx = record.execution.spawnCtx;
+      if (spawnCtx?.ui?.notify) {
+        try {
+          spawnCtx.ui.notify(`[Subagent "${record.display.type}" ${shortId}] context reached ${summary}`, "warning");
+        } catch {
+          /* ctx may be stale if the session was replaced */
+        }
+      }
+    }
+  }
+
   // ── Private ──
 
   /** Create callbacks that bridge manager events to a specific live view. */
@@ -199,6 +244,11 @@ export class SpawnCoordinator {
       includeStatus: true,
     });
 
+    // Surface the agent's final context size in the result the orchestrator
+    // reads (running = live, settled = captured at completion).
+    const contextSummary = formatContextSummary(resolveContextInfo(record.execution.session, record.stats));
+    const contextLine = contextSummary ? ` (context: ${contextSummary})` : "";
+
     try {
       // Pick delivery mode based on parent session state:
       // - steer: queues while running, delivers before next LLM call
@@ -210,7 +260,7 @@ export class SpawnCoordinator {
       pi.sendMessage(
         {
           customType: "subagent-result",
-          content: `[Subagent "${record.display.type}" ${record.id.slice(0, SHORT_ID_LENGTH)} ${record.lifecycle.status}]\n\n${formatResultContent(record)}`,
+          content: `[Subagent "${record.display.type}" ${record.id.slice(0, SHORT_ID_LENGTH)} ${record.lifecycle.status}]${contextLine}\n\n${formatResultContent(record)}`,
           details,
           display: true,
         },

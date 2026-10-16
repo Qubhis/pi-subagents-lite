@@ -216,6 +216,14 @@ The watchdog stops agents that hang. Two independent checks, both default 45 min
 
 The watchdog notifies the main session on a kill so it can act accordingly.
 
+### Context notification
+
+A Subagent's context window grows as it works; past roughly 120k-150k tokens many models lose quality. To avoid polling `AgentStatus`, set a token threshold and the orchestrator is notified automatically:
+
+- `contextNotifyThreshold` (tokens; default `0` = disabled): when a running Subagent's current context first reaches this many tokens, its orchestrator receives one message for that run (steered while the orchestrator runs, delivered as a follow-up while it is idle). The message names the Subagent and its context size so the orchestrator can stop or steer it.
+
+Context size is also surfaced wherever a Subagent is reported: `AgentStatus` lines, the agent details, and the final completion result all show current tokens, the context-window size, and the percent used. For a settled agent these come from the values captured at completion, so retro analysis still works.
+
 ### Output transcripts
 
 Output transcripts are disabled by default. Enable them globally via the `outputTranscript` config option or per-agent via the `output_transcript` frontmatter field. When enabled, the transcript streams to `/tmp/pi-agent-outputs/<agentId>.log` (append-only, `tail -f` friendly) and the widget shows the `tail -f` line. Logs and completed results survive on disk even if a session reload (`/reload`, extension reload) kills running agents.

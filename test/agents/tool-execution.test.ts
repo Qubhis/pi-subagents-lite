@@ -134,6 +134,7 @@ vi.mock("../../src/agents/usage.js", () => ({
   addUsage: vi.fn(),
   getLifetimeTotal: vi.fn(() => 0),
   getSessionContextPercent: vi.fn(() => null),
+  resolveContextInfo: vi.fn(() => ({ tokens: null, contextWindow: null, percent: null })),
 }));
 
 // Import after mocks are in place
