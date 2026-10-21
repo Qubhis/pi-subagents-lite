@@ -548,10 +548,24 @@ async function initSession(setup: SessionSetup): Promise<AgentSession> {
     parentLevel: ctx.thinkingLevel,
   });
   const agentDir = getAgentDir();
+  // Persist each subagent transcript as a native pi session JSONL under a
+  // per-parent folder, so extracting a parent session also captures all its
+  // subagent transcripts (used for agent evaluation). This folder is separate
+  // from pi's normal session dir, so these transcripts never pollute /resume.
+  // The parent id is always available; the parent file (for the parentSession
+  // back-link) is absent only for an ephemeral parent, in which case we omit
+  // the link rather than fail.
+  const parentSessionId = ctx.sessionManager.getSessionId();
+  const parentSessionFile = ctx.sessionManager.getSessionFile();
+  const subagentDir = path.join(agentDir, "pi-subagents", parentSessionId);
   const sessionOpts: Parameters<typeof createAgentSession>[0] = {
     cwd,
     agentDir,
-    sessionManager: SessionManager.inMemory(cwd),
+    sessionManager: SessionManager.create(
+      cwd,
+      subagentDir,
+      parentSessionFile ? { parentSession: parentSessionFile } : undefined,
+    ),
     settingsManager,
     model,
     // Explicit frontmatter gates the registry; a silent config delegates to pi
